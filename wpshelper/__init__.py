@@ -244,18 +244,18 @@ def wps_save_capture(handle, capture_absolute_filename):
     log_entry = f"wps_save_capture: {data}"
     handle['log'].append(log_entry)
 
-def wps_export_html_json(handle,html_absolute_filename):
+def wps_export_html(handle,html_absolute_filename):
     s = handle['socket']
     MAX_TO_READ = handle['max_data_from_automation_server']
     # • Save Capture – Wait until status has been reported.
     FTE_CMD="HTML Export;summary=0;databytes=1;decode=1;frames=all;file=" + str(html_absolute_filename) 
     send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
-    log_entry = f"wps_export_html_json: Sending: {send_data}"
+    log_entry = f"wps_export_html: Sending: {send_data}"
     handle['log'].append(log_entry)
     
     s.send(send_data)
     data=s.recv(MAX_TO_READ)
-    log_entry = f"wps_export_html_json: {data}"
+    log_entry = f"wps_export_html: {data}"
     handle['log'].append(log_entry)
 
 def wps_close(handle):
