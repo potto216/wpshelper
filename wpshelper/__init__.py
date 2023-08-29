@@ -229,19 +229,19 @@ def wps_analyze_capture(handle):
             log_entry = f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
             handle['log'].append(log_entry)
             time.sleep(1)
-            
+
 def wps_open_capture(handle, capture_absolute_filename):
     s = handle['socket']
     MAX_TO_READ = handle['max_data_from_automation_server']
     
     # • Save Capture – Wait until status has been reported.
-    FTE_CMD="Open Capture;" + str(capture_absolute_filename) 
+    FTE_CMD=r"Open Capture File;" + str(capture_absolute_filename) + r";notify=1" 
     send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
-    log_entry = f"wps_save_capture: Sending: {send_data}"
+    log_entry = f"wps_open_capture: Sending: {send_data}"
     handle['log'].append(log_entry)
     s.send(send_data)
     data=s.recv(MAX_TO_READ)
-    log_entry = f"wps_save_capture: {data}"
+    log_entry = f"wps_open_capture: {data}"
     handle['log'].append(log_entry)
     
 def wps_save_capture(handle, capture_absolute_filename):
@@ -277,9 +277,9 @@ def wps_export_spectrum(handle,spectrum_absolute_filename):
     s = handle['socket']
     MAX_TO_READ = handle['max_data_from_automation_server']
     # • Save Capture – Wait until status has been reported.
-    FTE_CMD="HTML Export;summary=0;databytes=1;decode=1;frames=all;file=" + str(spectrum_absolute_filename) 
+    FTE_CMD="Spectrum Export;file=" + str(spectrum_absolute_filename) 
     send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
-    log_entry = f"wps_export_html: Sending: {send_data}"
+    log_entry = f"wps_export_spectrum: Sending: {send_data}"
     handle['log'].append(log_entry)
     
     s.send(send_data)

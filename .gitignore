@@ -1,5 +1,3 @@
-# Local development directories
-sandbox/
 
 #data directory in root
 data/
@@ -143,8 +141,3 @@ Pipfile*
 # Key files
 *.key
 notebooks/*.zip
-
-opd-dev/
-docs/source/api/generated/openpolicedata.datasets.num_sources.rst
-generated/
-docs/source/api/api/openpolicedata.Source.rst
