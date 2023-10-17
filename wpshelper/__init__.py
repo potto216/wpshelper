@@ -286,6 +286,38 @@ def wps_export_spectrum(handle,spectrum_absolute_filename):
     data=s.recv(MAX_TO_READ)
     log_entry = f"wps_export_spectrum: {data}"
     handle['log'].append(log_entry)
+    
+def wps_get_available_streams_audio(handle):
+    s = handle['socket']
+    MAX_TO_READ = handle['max_data_from_automation_server']
+    
+    # • Save Capture – Wait until status has been reported.    
+    FTE_CMD=f"Plugin Command; Plugin Name=Audio Expert;Command=Get Available Streams;Parameters=No"
+    send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+    log_entry = f"wps_get_available_streams_audio: Sending: {send_data}"
+    handle['log'].append(log_entry)
+    
+    s.send(send_data)
+    data=s.recv(MAX_TO_READ)
+    log_entry = f"wps_get_available_streams_audio: {data}"
+    handle['log'].append(log_entry)
+    return data
+
+# This exports audio data from a capture
+def wps_export_audio(handle,audio_absolute_filename,audio_streams="1",audio_requestTypes="CSV&WAV",audio_time="all"):
+    s = handle['socket']
+    MAX_TO_READ = handle['max_data_from_automation_server']
+    
+    # • Save Capture – Wait until status has been reported.    
+    FTE_CMD=f"Plugin Command;Plugin Name=Audio Expert;Command=AES Export;Parameters=streams={audio_streams},requestTypes={audio_requestTypes},time={audio_time},file={audio_absolute_filename}"
+    send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+    log_entry = f"wps_export_audio: Sending: {send_data}"
+    handle['log'].append(log_entry)
+    
+    s.send(send_data)
+    data=s.recv(MAX_TO_READ)
+    log_entry = f"wps_export_audio: {data}"
+    handle['log'].append(log_entry)    
 
 def wps_close(handle):
     s = handle['socket']
