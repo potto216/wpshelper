@@ -286,13 +286,14 @@ def wps_export_spectrum(handle,spectrum_absolute_filename):
     data=s.recv(MAX_TO_READ)
     log_entry = f"wps_export_spectrum: {data}"
     handle['log'].append(log_entry)
-    
-def wps_get_available_streams_audio(handle):
+
+# This returns the number of audio streams in a capture
+def wps_get_available_streams_audio(handle,parameters="No"):
     s = handle['socket']
     MAX_TO_READ = handle['max_data_from_automation_server']
     
     # • Save Capture – Wait until status has been reported.    
-    FTE_CMD=f"Plugin Command; Plugin Name=Audio Expert;Command=Get Available Streams;Parameters=No"
+    FTE_CMD=f"Plugin Command;Plugin Name=Audio Expert;Command=Get Available Streams;Parameters={parameters}"
     send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
     log_entry = f"wps_get_available_streams_audio: Sending: {send_data}"
     handle['log'].append(log_entry)
