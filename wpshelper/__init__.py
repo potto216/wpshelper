@@ -272,6 +272,21 @@ def wps_export_html(handle,html_absolute_filename):
     log_entry = f"wps_export_html: {data}"
     handle['log'].append(log_entry)
 
+# export pcapng
+def wps_export_pcapng(handle, pcapng_absolute_filename, tech='LE', mode=0):
+    s = handle['socket']
+    MAX_TO_READ = handle['max_data_from_automation_server']
+    # Save Capture – Wait until status has been reported.
+    FTE_CMD = f"PCAPNG Export;file={pcapng_absolute_filename};tech={tech};mode={mode}"
+    send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
+    log_entry = f"wps_export_pcapng_du: Sending: {send_data}"
+    handle['log'].append(log_entry)
+    
+    s.send(send_data)
+    data = s.recv(MAX_TO_READ)
+    log_entry = f"wps_export_pcapng_du: {data}"
+    handle['log'].append(log_entry)
+
 # This exports a spectrum data from a capture
 def wps_export_spectrum(handle,spectrum_absolute_filename):
     s = handle['socket']
@@ -319,6 +334,38 @@ def wps_export_audio(handle,audio_absolute_filename,audio_streams="1",audio_requ
     data=s.recv(MAX_TO_READ)
     log_entry = f"wps_export_audio: {data}"
     handle['log'].append(log_entry)    
+
+# Add a Bookmark
+# Example values
+# bookmark_text = 'le collect'
+# bookmark_frame = 1
+def wps_add_bookmark(handle, bookmark_frame, bookmark_text):
+    s = handle['socket']
+    MAX_TO_READ = handle['max_data_from_automation_server']
+    
+    FTE_CMD=f"Add Bookmark;string={bookmark_text};frame={bookmark_frame}"
+    send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+    log_entry = f"wps_add_bookmark: Sending: {send_data}"
+    handle['log'].append(log_entry)
+    
+    s.send(send_data)
+    data=s.recv(MAX_TO_READ)
+    log_entry = f"wps_add_bookmark: {data}"
+    handle['log'].append(log_entry)
+
+# This is used to send a general command to the WPS
+def wps_send_command(handle, full_command):
+    s = handle['socket']
+    MAX_TO_READ = handle['max_data_from_automation_server']
+    # Start the recording
+    FTE_CMD=full_command
+    send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+    log_entry = f"wps_send_command: Sending: {send_data}"
+    handle['log'].append(log_entry)
+    s.send(send_data)
+    data=s.recv(MAX_TO_READ)
+    log_entry = f"wps_send_command: Receiving: {data}"
+    handle['log'].append(log_entry)
 
 def wps_close(handle):
     s = handle['socket']
