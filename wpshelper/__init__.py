@@ -462,6 +462,32 @@ def wps_close(handle, show_log=False):
 # session_keys is a list of 128 bit hex numbers starting with 0x
 # This runs the FTE_CMD "Update Matter;matterkeys=source_node_id,session_keys"
 def wps_update_matter_keys(handle, source_node_id, session_keys=None, show_log=False):
+    """Update Matter protocol security keys in Wireless Protocol Suite.
+    
+    This function sends a command to WPS to update the Matter keys to enable
+    decryption of encrypted Matter protocol messages in captures.
+    
+    Parameters:
+        handle (dict): Connection handle returned by wps_open().
+        source_node_id (str): 64-bit node ID in hex format (must start with '0x').
+                              Example: "0x12345678ABCDEF12"
+        session_keys (list, optional): List of 128-bit session keys in hex format 
+                                      (each must start with '0x').
+                                      Example: ["0x1234567890ABCDEF1234567890ABCDEF"]
+        show_log (bool): If True, print log messages to stdout. Default is False.
+    
+    Returns:
+        None: Function doesn't return a value but appends to handle['log'].
+    
+    Example:
+        >>> node_id = "0x12345678ABCDEF12"
+        >>> keys = ["0x1234567890ABCDEF1234567890ABCDEF", "0xABCDEF1234567890ABCDEF1234567890"]
+        >>> wps_update_matter_keys(handle, node_id, keys, show_log=True)
+    
+    Note: 
+        This command must be issued after opening a capture but before analyzing it.
+        The Matter keys are required for decryption of encrypted Matter protocol traffic.
+    """
     # Validate handle
     if not isinstance(handle, dict) or 'socket' not in handle:
         raise ValueError("Invalid handle: must be a dict containing a valid 'socket'.")
