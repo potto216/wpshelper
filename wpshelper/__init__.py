@@ -1,14 +1,41 @@
 import socket
 import time
-import os
-import sys
-import platform
-from pathlib import Path
-import datetime as datetime
 
 class WPSTimeoutError(TimeoutError):
     """Custom exception for WPS command timeouts."""
-    pass
+    def __init__(self, message, handle=None):
+        super().__init__(message)
+        self.handle = handle
+
+
+def _recv_and_parse(handle, expected_cmd=None, expected_status=None, expected_reason=None, show_log=False):
+    """Receive data from the socket, decode and split by ';'.
+
+    If expected_cmd / expected_status / expected_reason are provided, this
+    helper will return a tuple (ok, result_parse, raw_str) where `ok` is True
+    when all provided expectations match, otherwise False.
+    """
+    s = handle["socket"]
+    max_to_read = handle["max_data_from_automation_server"]
+
+    rcv_data = s.recv(max_to_read)
+    result_str = rcv_data.decode()
+    result_parse = result_str.split(";")
+
+    log_entry = f"_recv_and_parse: {result_str}"
+    handle["log"].append(log_entry)
+    if show_log:
+        print(log_entry)
+
+    ok = True
+    if expected_cmd is not None and (len(result_parse) == 0 or result_parse[0] != expected_cmd):
+        ok = False
+    if expected_status is not None and (len(result_parse) < 2 or result_parse[1] != expected_status):
+        ok = False
+    if expected_reason is not None and (len(result_parse) < 4 or result_parse[3] != expected_reason):
+        ok = False
+
+    return ok, result_parse, result_str
 
 def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executable_path=None, personality_key=None, sleep_time=1, max_wait_time=60, show_log=False):
     """
@@ -28,6 +55,11 @@ def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executabl
     :raises socket.error: On socket connection failure.
     """
     
+    if wps_executable_path is None or not str(wps_executable_path):
+        raise ValueError("wps_executable_path must be a non-empty string.")
+    if personality_key is None or not str(personality_key):
+        raise ValueError("personality_key must be a non-empty string.")
+
     handle={'max_data_from_automation_server':max_to_read, 'tcp_ip':tcp_ip, 'tcp_port':tcp_port, 'sleep_time':sleep_time, 'max_wait_time': max_wait_time}
     handle['log']=[]
     MAX_TO_READ = handle['max_data_from_automation_server']
@@ -35,6 +67,8 @@ def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executabl
 
     try:
         s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        # Use a socket timeout so higher-level timeouts cannot be blocked
+        s.settimeout(handle['sleep_time'])
         s.connect((handle['tcp_ip'],handle['tcp_port']))
         handle['socket'] = s
         data=s.recv(handle['max_data_from_automation_server'])
@@ -69,16 +103,10 @@ def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executabl
             error_msg = f"wps_open: Timeout waiting for '{EXPECTED_COMMAND} {EXPECTED_STATUS}' after {handle['max_wait_time']} seconds."
             handle['log'].append(error_msg)
             if show_log: print(error_msg)
-            raise WPSTimeoutError(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
 
-        rcv_data=s.recv(MAX_TO_READ)
-        result_str=str(rcv_data.decode())
-        log_entry = f"wps_open: s1 received: {result_str}"
-        handle['log'].append(log_entry)
-        if show_log:
-            print(log_entry)
-        result_parse = result_str.split(";")
-        if len(result_parse) > 1 and result_parse[0]==EXPECTED_COMMAND  and result_parse[1]==EXPECTED_STATUS:
+        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND, EXPECTED_STATUS, show_log=show_log)
+        if ok:
             is_done_waiting=True
         else:
             log_entry = f"wps_open: Received data parsed to {result_parse}, which indicates startup is not complete. Still waiting for the command {EXPECTED_COMMAND} with a status of {EXPECTED_STATUS}."
@@ -97,7 +125,7 @@ def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executabl
             error_msg = f"wps_open: Timeout waiting for '{EXPECTED_COMMAND_INIT} {EXPECTED_STATUS_INIT}' after {handle['max_wait_time']} seconds."
             handle['log'].append(error_msg)
             if show_log: print(error_msg)
-            raise WPSTimeoutError(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
 
         FTE_CMD="Is Initialized"
         send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
@@ -107,14 +135,8 @@ def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executabl
             print(log_entry)
         s.send(send_data)
 
-        rcv_data=s.recv(MAX_TO_READ)
-        result_str=str(rcv_data.decode())
-        log_entry = f"wps_open: s2 received: {result_str}"
-        handle['log'].append(log_entry)
-        if show_log:
-            print(log_entry)
-        result_parse = result_str.split(";")
-        if len(result_parse) > 1 and result_parse[0]==EXPECTED_COMMAND_INIT  and result_parse[1]==EXPECTED_STATUS_INIT:
+        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND_INIT, EXPECTED_STATUS_INIT, show_log=show_log)
+        if ok:
             is_done_waiting=True
         else:
             log_entry = f"wps_open: Parse of received: {result_parse}. Not the desired result so still waiting.."
@@ -164,16 +186,10 @@ def wps_configure(handle, personality_key, capture_technology, show_log=False):
             error_msg = f"wps_configure: Timeout waiting for '{EXPECTED_COMMAND} {EXPECTED_STATUS}' after {handle['max_wait_time']} seconds."
             handle['log'].append(error_msg)
             if show_log: print(error_msg)
-            raise WPSTimeoutError(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
 
-        rcv_data=s.recv(MAX_TO_READ)
-        result_str=str(rcv_data.decode())
-        log_entry = f"wps_configure: received: {result_str}"
-        handle['log'].append(log_entry)
-        if show_log:
-            print(log_entry)
-        result_parse = result_str.split(";")
-        if len(result_parse) > 1 and result_parse[0]==EXPECTED_COMMAND  and result_parse[1]==EXPECTED_STATUS:
+        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND, EXPECTED_STATUS, show_log=show_log)
+        if ok:
             is_done_waiting=True
         else:
             log_entry = f"wps_configure: Parse of received: {result_parse}. Not the desired result so still waiting."
@@ -230,7 +246,7 @@ def wps_stop_record(handle, show_log=False):
     if show_log:
         print(log_entry)
 
-def wps_analyze_capture(handle):
+def wps_analyze_capture(handle, show_log=False):
     """
     Analyze the capture on the WPS (start, poll until complete, stop).
 
@@ -239,7 +255,6 @@ def wps_analyze_capture(handle):
     :raises WPSTimeoutError: If any polling stage times out.
     """    
     s = handle['socket']
-    MAX_TO_READ = handle['max_data_from_automation_server']
 
     # • Start Analyze
     FTE_CMD="Start Analyze"
@@ -248,15 +263,11 @@ def wps_analyze_capture(handle):
     handle['log'].append(log_entry)
     s.send(send_data)
 
-    rcv_data=s.recv(MAX_TO_READ)
-    result_str=str(rcv_data.decode())
-    log_entry = f"wps_analyze_capture: received: {result_str}"
-    handle['log'].append(log_entry)
-    result_parse = result_str.split(";")
-    if not (len(result_parse) > 1 and result_parse[0]=="START ANALYZE"  and result_parse[1]=="SUCCEEDED"):
+    ok, result_parse, result_str = _recv_and_parse(handle, "START ANALYZE", "SUCCEEDED", show_log=show_log)
+    if not ok:
         log_entry = f"wps_analyze_capture: ERROR failed to start analysis with a parsed value of: {result_parse}"
         handle['log'].append(log_entry)
-        # Consider raising an error here if start analyze failure is critical
+        raise RuntimeError("Failed to start analysis: " + result_str)
 
     # • Is Analyze Complete
     start_time = time.monotonic()
@@ -269,7 +280,7 @@ def wps_analyze_capture(handle):
             error_msg = f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_AC} {EXPECTED_STATUS_AC}' with reason '{EXPECTED_REASON_AC}' after {handle['max_wait_time']} seconds."
             handle['log'].append(error_msg)
             if show_log: print(error_msg)
-            raise WPSTimeoutError(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
 
         FTE_CMD="IS ANALYZE COMPLETE"
         send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
@@ -277,16 +288,8 @@ def wps_analyze_capture(handle):
         handle['log'].append(log_entry)
         s.send(send_data)
 
-        rcv_data=s.recv(MAX_TO_READ)
-        result_str=str(rcv_data.decode())
-        log_entry = f"wps_analyze_capture: {result_str}"
-        handle['log'].append(log_entry)
-
-        result_parse = result_str.split(";")
-        if len(result_parse) > 3 and \
-           result_parse[0]==EXPECTED_COMMAND_AC and \
-           result_parse[1]==EXPECTED_STATUS_AC  and \
-           result_parse[3]==EXPECTED_REASON_AC:
+        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND_AC, EXPECTED_STATUS_AC, EXPECTED_REASON_AC, show_log=show_log)
+        if ok:
             is_done_waiting=True
         else:
             log_entry = f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
@@ -299,9 +302,7 @@ def wps_analyze_capture(handle):
     log_entry = f"wps_analyze_capture: sending: {send_data}"
     handle['log'].append(log_entry)
     s.send(send_data)
-    data=s.recv(MAX_TO_READ) # Assuming Stop Analyze response is immediate
-    log_entry = f"wps_analyze_capture: {data}"
-    handle['log'].append(log_entry)
+    _ok, _parsed, result_str = _recv_and_parse(handle, show_log=show_log)
 
     # • Query State
     start_time = time.monotonic()
@@ -315,22 +316,15 @@ def wps_analyze_capture(handle):
             error_msg = f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_QS} {EXPECTED_STATUS_QS}' with reason '{EXPECTED_REASON_QS1}' or '{EXPECTED_REASON_QS2}' after {handle['max_wait_time']} seconds."
             handle['log'].append(error_msg)
             if show_log: print(error_msg)
-            raise WPSTimeoutError(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
 
         FTE_CMD="Query State"
         send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
         log_entry = f"wps_analyze_capture: sending: {send_data}"
         s.send(send_data)
-        rcv_data=s.recv(MAX_TO_READ)
-        result_str=str(rcv_data.decode())
-        log_entry = f"wps_analyze_capture: {result_str}"
-        handle['log'].append(log_entry)
 
-        result_parse = result_str.split(";")
-        if len(result_parse) > 3 and \
-           result_parse[0]==EXPECTED_COMMAND_QS and \
-           result_parse[1]==EXPECTED_STATUS_QS  and \
-           (result_parse[3]==EXPECTED_REASON_QS1 or result_parse[3]==EXPECTED_REASON_QS2):
+        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND_QS, EXPECTED_STATUS_QS, show_log=show_log)
+        if ok and len(result_parse) > 3 and (result_parse[3]==EXPECTED_REASON_QS1 or result_parse[3]==EXPECTED_REASON_QS2):
             is_done_waiting=True
         else:
             log_entry = f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
@@ -348,22 +342,16 @@ def wps_analyze_capture(handle):
             error_msg = f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_PC} {EXPECTED_STATUS_PC}' with reason '{EXPECTED_REASON_PC}' after {handle['max_wait_time']} seconds."
             handle['log'].append(error_msg)
             if show_log: print(error_msg)
-            raise WPSTimeoutError(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
 
         FTE_CMD="Is Processing Complete"
         send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
         log_entry = f"wps_analyze_capture: sending: {send_data}"
         handle['log'].append(log_entry)
         s.send(send_data)
-        rcv_data=s.recv(MAX_TO_READ)
-        result_str=str(rcv_data.decode())
-        log_entry = f"wps_analyze_capture: {result_str}"
-        handle['log'].append(log_entry)
-        result_parse = result_str.split(";")
-        if len(result_parse) > 3 and \
-           result_parse[0]==EXPECTED_COMMAND_PC and \
-           result_parse[1]==EXPECTED_STATUS_PC  and \
-           result_parse[3]==EXPECTED_REASON_PC:
+
+        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND_PC, EXPECTED_STATUS_PC, EXPECTED_REASON_PC, show_log=show_log)
+        if ok:
             is_done_waiting=True
         else:
             log_entry = f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
@@ -403,7 +391,7 @@ def wps_open_capture(handle, capture_absolute_filename, show_log=False):
             error_msg = f"wps_open_capture: Timeout waiting for final confirmation (not '{EXPECTED_REASON_OC_INTERIM}') after {handle['max_wait_time']} seconds."
             handle['log'].append(error_msg)
             if show_log: print(error_msg)
-            raise WPSTimeoutError(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
 
         data=s.recv(MAX_TO_READ)
         log_entry = f"wps_open_capture: {data}"
