@@ -18,7 +18,15 @@ def _recv_and_parse(handle, expected_cmd=None, expected_status=None, expected_re
     s = handle["socket"]
     max_to_read = handle["max_data_from_automation_server"]
 
-    rcv_data = s.recv(max_to_read)
+    try:
+        rcv_data = s.recv(max_to_read)
+    except (socket.timeout, TimeoutError) as e:
+        log_entry = f"_recv_and_parse: Socket receive timed out: {e}"
+        handle["log"].append(log_entry)
+        if show_log:
+            print(log_entry)
+        return False, None, None
+
     result_str = rcv_data.decode()
     result_parse = result_str.split(";")
 
@@ -267,7 +275,7 @@ def wps_analyze_capture(handle, show_log=False):
     if not ok:
         log_entry = f"wps_analyze_capture: ERROR failed to start analysis with a parsed value of: {result_parse}"
         handle['log'].append(log_entry)
-        raise RuntimeError("Failed to start analysis: " + result_str)
+        raise RuntimeError(f"Failed to start analysis: {result_str}")
 
     # • Is Analyze Complete
     start_time = time.monotonic()
@@ -444,30 +452,166 @@ def wps_save_capture(handle, capture_absolute_filename, show_log=False):
     if show_log:
         print(log_entry)
 
-def wps_export_html(handle,html_absolute_filename, show_log=False):
+def wps_export_html(
+        handle,
+        html_absolute_filename=None,
+        show_log=False,
+        *,
+        summary=0,
+        databytes=1,
+        decode=None,
+        frames='all',
+        frame_range_upper=None,
+        frame_range_lower=None,
+        layers=None):
     """
     Export capture data as HTML.
 
+    Command format (sent to the analyzer):
+    "HTML Export;summary=<summary>;databytes=<bytes>;decode=<decode>;[frames=<frames>;]"
+    "[frame range upper=<frame number>;][frame range lower=<frame number>;]"
+    "[layers=<layer1>,<layer2>,...;]file=<export path>"
+
+    Notes:
+    - This can take considerable time to generate the HTML.
+    - If no file is specified, the analyzer will generate a default filename in its log directory.
+    - The 'layers' parameter can be a string (single layer) or a list/tuple of strings. By default, all layers are included.
+
+    Parameter details (matches WPS "HTML Export" command behavior):
+    - summary:
+        - 0: do not include summary (default)
+        - 1: include summary
+    - databytes:
+        - 0: do not include data bytes
+        - 1: include data bytes (default)
+    - decode:
+        - 0: do not include decode
+        - 1: include decode
+        - None: choose a default based on databytes (defaults to 1 when databytes=1, else 0)
+    - frames:
+        - 'all': export all frames (default). Any frame range parameters are ignored by the analyzer.
+        - 'selected': export only frames within the selected range. If frame ranges are not provided,
+          the analyzer defaults lower to 0 and upper to the highest frame.
+    - frame_range_lower / frame_range_upper:
+        Valid frame numbers are 0 up to the highest frame. Only meaningful when frames='selected'.
+    - layers:
+        Limit export to specific layers. Provide either:
+        - a comma-separated string of layer names (no extra spaces), e.g. "LE BB,LE BIS", or
+        - a list/tuple of layer name strings, e.g. ["LE BB", "LE BIS"]
+        If omitted/None, all layers are exported.
+
     :param dict handle: Connection handle returned by wps_open().
-    :param str html_absolute_filename: Output HTML file path.
+    :param str html_absolute_filename: Output HTML file path (optional). If only a filename is
+        provided, the analyzer prepends its configured log directory.
     :param bool show_log: If True, print send/receive log.
+
+    :param int summary: 0/1 (see above).
+    :param int databytes: 0/1 (see above).
+    :param int|None decode: 0/1/None (see above).
+    :param str frames: "all" or "selected".
+    :param int|None frame_range_upper: Upper frame number when frames="selected".
+    :param int|None frame_range_lower: Lower frame number when frames="selected".
+    :param str|list|tuple|None layers: Layer filter (see above).
+
     :returns: None
-    """    
+    :raises ValueError: On invalid argument values.
+    :raises WPSTimeoutError: If the command does not complete before handle['max_wait_time'].
+    :raises RuntimeError: If the analyzer reports FAILED.
+    """ 
+    if not isinstance(handle, dict) or "socket" not in handle:
+        raise ValueError("Invalid handle provided. Must be a dict returned by wps_open().")
+    
     s = handle['socket']
     MAX_TO_READ = handle['max_data_from_automation_server']
-    # • Save Capture – Wait until status has been reported.
-    FTE_CMD="HTML Export;summary=0;databytes=1;decode=1;frames=all;file=" + str(html_absolute_filename)
-    send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+
+    if summary not in (0, 1):
+        raise ValueError("summary must be 0 or 1")
+    if databytes not in (0, 1):
+        raise ValueError("databytes must be 0 or 1")
+    if decode is None:
+        decode = 1 if databytes == 1 else 0
+    if decode not in (0, 1):
+        raise ValueError("decode must be 0 or 1")
+
+    if frames is None:
+        frames = 'all'
+    if frames not in ('all', 'selected'):
+        raise ValueError("frames must be 'all' or 'selected'")
+
+    def _format_layers(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (list, tuple)):
+            parts = []
+            for item in value:
+                if not isinstance(item, str) or not item:
+                    raise ValueError("layers must be a string or a list/tuple of non-empty strings")
+                parts.append(item)
+            return ",".join(parts)
+        raise ValueError("layers must be a string or a list/tuple of strings")
+
+    cmd_parts = [
+        "HTML Export",
+        f"summary={summary}",
+        f"databytes={databytes}",
+        f"decode={decode}",
+    ]
+
+    # Only include frames if it's non-default, per docs.
+    if frames != 'all':
+        cmd_parts.append(f"frames={frames}")
+
+    if frame_range_upper is not None:
+        cmd_parts.append(f"frame range upper={frame_range_upper}")
+    if frame_range_lower is not None:
+        cmd_parts.append(f"frame range lower={frame_range_lower}")
+
+    layers_str = _format_layers(layers)
+    if layers_str:
+        cmd_parts.append(f"layers={layers_str}")
+
+    if html_absolute_filename is not None and str(html_absolute_filename) != "":
+        cmd_parts.append(f"file={html_absolute_filename}")
+
+    FTE_CMD = ";".join(cmd_parts)
+
+    send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
     log_entry = f"wps_export_html: sending: {send_data}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
-    log_entry = f"wps_export_html: {data}"
-    handle['log'].append(log_entry)
-    if show_log:
-        print(log_entry)
+
+    # Wait until status has been reported.
+    start_time = time.monotonic()
+    EXPECTED_COMMAND = "HTML EXPORT"
+    while True:
+        if time.monotonic() - start_time > handle['max_wait_time']:
+            error_msg = (
+                f"wps_export_html: Timeout waiting for '{EXPECTED_COMMAND} SUCCEEDED' "
+                f"after {handle['max_wait_time']} seconds."
+            )
+            handle['log'].append(error_msg)
+            if show_log:
+                print(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
+
+        ok, result_parse, result_str = _recv_and_parse(handle, expected_cmd=EXPECTED_COMMAND, show_log=show_log)
+        if not ok:
+            time.sleep(handle['sleep_time'])
+            continue
+
+        status = result_parse[1] if result_parse and len(result_parse) > 1 else None
+        if status == "SUCCEEDED":
+            return
+        if status == "FAILED":
+            reason = result_parse[3] if result_parse and len(result_parse) > 3 else result_str
+            raise RuntimeError(f"HTML Export failed: {reason}")
+
+        # Unknown/intermediate status; keep waiting.
+        time.sleep(handle['sleep_time'])
 
 def wps_export_pcapng(handle, pcapng_absolute_filename, tech='LE', mode=0, show_log=False):
     """
