@@ -1,3 +1,5 @@
+import os
+import re
 import socket
 import time
 
@@ -6,6 +8,91 @@ class WPSTimeoutError(TimeoutError):
     def __init__(self, message, handle=None):
         super().__init__(message)
         self.handle = handle
+
+
+def wps_find_installations(
+    base_dir=r"C:\\Program Files (x86)\\Teledyne LeCroy Wireless",
+    show_log=False,
+):
+    """
+    Find Wireless Protocol Suite installations.
+
+    This scans for directories matching "Wireless Protocol Suite <version>" in
+    the provided base directory and returns a summary of what was found.
+
+    :param str base_dir: Base directory that contains WPS installs.
+    :param bool show_log: If True, print log messages.
+    :returns: Dict with installations list, latest info, and paths by version.
+    :rtype: dict
+    """
+    log = []
+    if not base_dir or not os.path.isdir(base_dir):
+        log_entry = f"wps_find_installations: base_dir '{base_dir}' not found."
+        log.append(log_entry)
+        if show_log:
+            print(log_entry)
+        return {"installations": [], "latest": None, "paths_by_version": {}, "log": log}
+
+    def _parse_version(dir_name):
+        match = re.match(r"^Wireless Protocol Suite (?P<version>\d+(?:\.\d+)*)", dir_name)
+        if not match:
+            return None
+        version = match.group("version")
+        version_parts = tuple(int(part) for part in version.split("."))
+        is_beta = "beta" in dir_name.lower()
+        return version, version_parts, is_beta
+
+    installations = []
+    paths_by_version = {}
+
+    for entry in os.listdir(base_dir):
+        full_path = os.path.join(base_dir, entry)
+        if not os.path.isdir(full_path):
+            continue
+        parsed = _parse_version(entry)
+        if parsed is None:
+            continue
+        version, version_parts, is_beta = parsed
+        installations.append(
+            {
+                "name": entry,
+                "version": version,
+                "path": full_path,
+                "is_beta": is_beta,
+                "version_parts": version_parts,
+            }
+        )
+        paths_by_version.setdefault(version, []).append(full_path)
+
+    installations.sort(key=lambda item: (item["version_parts"], not item["is_beta"]))
+
+    latest = None
+    if installations:
+        latest_entry = max(
+            installations,
+            key=lambda item: (item["version_parts"], not item["is_beta"]),
+        )
+        latest = {
+            "name": latest_entry["name"],
+            "version": latest_entry["version"],
+            "path": latest_entry["path"],
+            "is_beta": latest_entry["is_beta"],
+        }
+
+    log_entry = f"wps_find_installations: found {len(installations)} installs."
+    log.append(log_entry)
+    if show_log:
+        print(log_entry)
+
+    for item in installations:
+        item.pop("version_parts", None)
+
+    return {
+        "installations": installations,
+        "latest": latest,
+        "paths_by_version": paths_by_version,
+        "log": log,
+    }
 
 
 def _recv_and_parse(handle, expected_cmd=None, expected_status=None, expected_reason=None, show_log=False):

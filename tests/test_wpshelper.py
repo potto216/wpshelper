@@ -3,11 +3,16 @@ import socket
 import pytest
 
 from tests.mock_tcp import MockAutomationSimulator
-from wpshelper import _recv_and_parse, wps_export_html, wps_update_matter_keys
+from wpshelper import (
+    _recv_and_parse,
+    wps_export_html,
+    wps_find_installations,
+    wps_update_matter_keys,
+)
 
 
 def test_recv_and_parse_matches_expectations():
-    with MockAutomationSimulator(responses=[b"CMD;OK;extra;Reason=ready\r\n"]) as simulator:
+    with MockAutomationSimulator(connect_responses=[b"CMD;OK;extra;Reason=ready\r\n"]) as simulator:
         handle = simulator.create_handle()
         ok, parsed, raw = _recv_and_parse(
             handle,
@@ -22,7 +27,7 @@ def test_recv_and_parse_matches_expectations():
 
 
 def test_recv_and_parse_mismatch_returns_false():
-    with MockAutomationSimulator(responses=[b"CMD;OK;extra;Reason=ready\r\n"]) as simulator:
+    with MockAutomationSimulator(connect_responses=[b"CMD;OK;extra;Reason=ready\r\n"]) as simulator:
         handle = simulator.create_handle()
         ok, parsed, raw = _recv_and_parse(handle, expected_cmd="NOPE")
 
@@ -93,3 +98,25 @@ def test_wps_update_matter_keys_rejects_invalid_inputs():
 
         with pytest.raises(ValueError, match="session_keys must be a list"):
             wps_update_matter_keys(handle, "0x1", "0x2")
+
+
+def test_wps_find_installations_returns_latest(tmp_path):
+    base_dir = tmp_path / "Teledyne LeCroy Wireless"
+    base_dir.mkdir()
+    (base_dir / "Wireless Protocol Suite 4.00").mkdir()
+    (base_dir / "Wireless Protocol Suite 4.25").mkdir()
+    (base_dir / "Wireless Protocol Suite 4.30 (BETA)").mkdir()
+
+    result = wps_find_installations(str(base_dir))
+
+    assert result["latest"]["version"] == "4.30"
+    assert result["latest"]["is_beta"] is True
+    assert result["paths_by_version"]["4.25"] == [str(base_dir / "Wireless Protocol Suite 4.25")]
+
+
+def test_wps_find_installations_handles_missing_directory(tmp_path):
+    missing_dir = tmp_path / "missing"
+    result = wps_find_installations(str(missing_dir))
+
+    assert result["installations"] == []
+    assert result["latest"] is None
