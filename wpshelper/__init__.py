@@ -132,7 +132,45 @@ def _recv_and_parse(handle, expected_cmd=None, expected_status=None, expected_re
 
     return ok, result_parse, result_str
 
-def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executable_path=None, personality_key=None, sleep_time=1, max_wait_time=60, show_log=False):
+def _recv_with_retries(handle, max_to_read=None, retry_attempts=None, retry_sleep=None, show_log=False, context=""):
+    """Receive data from the socket with configurable retry attempts on timeout."""
+    s = handle["socket"]
+    if max_to_read is None:
+        max_to_read = handle["max_data_from_automation_server"]
+
+    retries = handle.get("recv_retry_attempts", 0) if retry_attempts is None else retry_attempts
+    sleep_time = handle.get("recv_retry_sleep", handle.get("sleep_time", 1)) if retry_sleep is None else retry_sleep
+    last_exc = None
+
+    for attempt in range(retries + 1):
+        try:
+            return s.recv(max_to_read)
+        except (socket.timeout, TimeoutError) as exc:
+            last_exc = exc
+            log_entry = (
+                f"_recv_with_retries: timeout in {context or 'recv'} "
+                f"(attempt {attempt + 1}/{retries + 1}): {exc}"
+            )
+            handle["log"].append(log_entry)
+            if show_log:
+                print(log_entry)
+            if attempt < retries:
+                time.sleep(sleep_time)
+
+    raise last_exc
+
+def wps_open(
+    tcp_ip="127.0.0.1",
+    tcp_port=22901,
+    max_to_read=1000,
+    wps_executable_path=None,
+    personality_key=None,
+    sleep_time=1,
+    max_wait_time=60,
+    recv_retry_attempts=0,
+    recv_retry_sleep=None,
+    show_log=False,
+):
     """
     Open a connection to the WPS automation server and start the FTS.
 
@@ -143,6 +181,8 @@ def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executabl
     :param str personality_key: Personality key for the hardware.
     :param int sleep_time: Seconds to sleep between polling attempts.
     :param int max_wait_time: Max seconds to wait before timing out.
+    :param int recv_retry_attempts: Number of recv retries on timeout.
+    :param float recv_retry_sleep: Seconds to sleep between recv retries (defaults to sleep_time).
     :param bool show_log: If True, print log messages.
     :returns: A dict handle containing socket, settings, and log.
     :rtype: dict
@@ -155,7 +195,15 @@ def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executabl
     if personality_key is None or not str(personality_key):
         raise ValueError("personality_key must be a non-empty string.")
 
-    handle={'max_data_from_automation_server':max_to_read, 'tcp_ip':tcp_ip, 'tcp_port':tcp_port, 'sleep_time':sleep_time, 'max_wait_time': max_wait_time}
+    handle={
+        'max_data_from_automation_server':max_to_read,
+        'tcp_ip':tcp_ip,
+        'tcp_port':tcp_port,
+        'sleep_time':sleep_time,
+        'max_wait_time': max_wait_time,
+        'recv_retry_attempts': recv_retry_attempts,
+        'recv_retry_sleep': sleep_time if recv_retry_sleep is None else recv_retry_sleep,
+    }
     handle['log']=[]
     MAX_TO_READ = handle['max_data_from_automation_server']
     handle['wps_executable_path']=wps_executable_path
@@ -166,7 +214,7 @@ def wps_open(tcp_ip="127.0.0.1", tcp_port=22901, max_to_read=1000, wps_executabl
         s.settimeout(handle['sleep_time'])
         s.connect((handle['tcp_ip'],handle['tcp_port']))
         handle['socket'] = s
-        data=s.recv(handle['max_data_from_automation_server'])
+        data=_recv_with_retries(handle, show_log=show_log, context="wps_open: initial recv")
         log_entry = f"wps_open: Trying connection. Receiving: {data}"
         handle['log'].append(log_entry)
         if show_log:
@@ -311,7 +359,7 @@ def wps_start_record(handle, show_log=False):
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_start_record")
     log_entry = f"wps_start_record: Receiving: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -335,7 +383,7 @@ def wps_stop_record(handle, show_log=False):
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_stop_record")
     log_entry = f"wps_stop_record: receiving: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -488,7 +536,7 @@ def wps_open_capture(handle, capture_absolute_filename, show_log=False):
             if show_log: print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        data=s.recv(MAX_TO_READ)
+        data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_open_capture")
         log_entry = f"wps_open_capture: {data}"
         handle['log'].append(log_entry)
         if show_log:
@@ -533,7 +581,7 @@ def wps_save_capture(handle, capture_absolute_filename, show_log=False):
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_save_capture")
     log_entry = f"wps_save_capture: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -722,7 +770,7 @@ def wps_export_pcapng(handle, pcapng_absolute_filename, tech='LE', mode=0, show_
         print(log_entry)
 
     s.send(send_data)
-    data = s.recv(MAX_TO_READ)
+    data = _recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_export_pcapng")
     log_entry = f"wps_export_pcapng_du: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -747,7 +795,7 @@ def wps_export_spectrum(handle,spectrum_absolute_filename, show_log=False):
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_export_spectrum")
     log_entry = f"wps_export_spectrum: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -775,7 +823,7 @@ def wps_get_available_streams_audio(handle,parameters="No", show_log=False):
         print(log_entry)
 
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_get_available_streams_audio")
     log_entry = f"wps_get_available_streams_audio: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -808,7 +856,7 @@ def wps_export_audio(handle,audio_absolute_filename,audio_streams="1",audio_requ
         print(log_entry)
 
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_export_audio")
     log_entry = f"wps_export_audio: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -839,7 +887,7 @@ def wps_add_bookmark(handle, bookmark_frame, bookmark_text, show_log=False):
         print(log_entry)
 
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_add_bookmark")
     log_entry = f"wps_add_bookmark: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -866,18 +914,20 @@ def wps_send_command(handle, full_command, show_log=False):
         print(log_entry)
 
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_send_command")
     log_entry = f"wps_send_command: Receiving: {data}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
 
-def wps_close(handle, show_log=False):
+def wps_close(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep=None):
     """
     Close the connection and stop the FTS.
 
     :param dict handle: Connection handle returned by wps_open().
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -891,7 +941,14 @@ def wps_close(handle, show_log=False):
         print(log_entry)
 
     s.send(send_data)
-    data=s.recv(MAX_TO_READ)
+    data=_recv_with_retries(
+        handle,
+        MAX_TO_READ,
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        show_log=show_log,
+        context="wps_close",
+    )
     log_entry = f"wps_close: {data}"
     handle['log'].append(log_entry)
     if show_log:
