@@ -159,6 +159,62 @@ def _recv_with_retries(handle, max_to_read=None, retry_attempts=None, retry_slee
 
     raise last_exc
 
+
+def _wait_for_command_result(
+    handle,
+    expected_cmd: str,
+    *,
+    expected_status: str = "SUCCEEDED",
+    show_log: bool = False,
+    context: str = "",
+):
+    """Wait up to handle['max_wait_time'] for a specific command result.
+
+    This is used for commands that can legitimately take longer than the socket
+    timeout (e.g., Save Capture, exports). It polls recv until it sees a message
+    whose command matches expected_cmd. If that message's status is FAILED, it
+    raises RuntimeError. If it never arrives before max_wait_time, it raises
+    WPSTimeoutError.
+
+    :returns: (result_parse, result_str)
+    """
+    start_time = time.monotonic()
+    max_wait = handle.get('max_wait_time', 60)
+
+    while True:
+        if time.monotonic() - start_time > max_wait:
+            error_msg = (
+                f"{context or expected_cmd}: Timeout waiting for '{expected_cmd} {expected_status}' "
+                f"after {max_wait} seconds."
+            )
+            handle['log'].append(error_msg)
+            if show_log:
+                print(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
+
+        ok, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+
+        # Socket timeout: keep waiting until max_wait_time.
+        if result_parse is None:
+            continue
+
+        # Unexpected/async message: ignore and keep waiting.
+        if len(result_parse) == 0 or result_parse[0] != expected_cmd:
+            log_entry = f"{context or expected_cmd}: ignoring unexpected response: {result_str}"
+            handle['log'].append(log_entry)
+            if show_log:
+                print(log_entry)
+            continue
+
+        status = result_parse[1] if len(result_parse) > 1 else None
+        if status == expected_status:
+            return result_parse, result_str
+        if status == "FAILED":
+            raise RuntimeError(f"{context or expected_cmd}: {result_str}")
+
+        # Any other status: keep waiting.
+        time.sleep(handle.get('sleep_time', 1))
+
 def wps_open(
     tcp_ip="127.0.0.1",
     tcp_port=22901,
@@ -383,11 +439,48 @@ def wps_stop_record(handle, show_log=False):
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_stop_record")
-    log_entry = f"wps_stop_record: receiving: {data}"
-    handle['log'].append(log_entry)
-    if show_log:
-        print(log_entry)
+
+    # Stop can take longer than the socket timeout; wait up to max_wait_time.
+    start_time = time.monotonic()
+    expected_cmd = "STOP RECORD"
+    expected_status = "SUCCEEDED"
+    while True:
+        if time.monotonic() - start_time > handle.get('max_wait_time', 60):
+            error_msg = (
+                f"wps_stop_record: Timeout waiting for '{expected_cmd} {expected_status}' "
+                f"after {handle.get('max_wait_time', 60)} seconds."
+            )
+            handle['log'].append(error_msg)
+            if show_log:
+                print(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
+
+        ok, result_parse, result_str = _recv_and_parse(
+            handle,
+            expected_cmd=expected_cmd,
+            expected_status=expected_status,
+            show_log=show_log,
+        )
+
+        # Timeout in _recv_and_parse yields (False, None, None): keep waiting.
+        if result_parse is None:
+            continue
+
+        # If it's the STOP RECORD response, either succeed or fail fast.
+        if len(result_parse) >= 2 and result_parse[0] == expected_cmd:
+            if ok:
+                log_entry = f"wps_stop_record: receiving: {result_str}"
+                handle['log'].append(log_entry)
+                if show_log:
+                    print(log_entry)
+                return
+            raise RuntimeError(f"wps_stop_record: Stop Record failed: {result_str}")
+
+        # Unexpected/async message; keep waiting.
+        log_entry = f"wps_stop_record: ignoring unexpected response: {result_str}"
+        handle['log'].append(log_entry)
+        if show_log:
+            print(log_entry)
 
 def wps_analyze_capture(handle, show_log=False):
     """
@@ -581,8 +674,15 @@ def wps_save_capture(handle, capture_absolute_filename, show_log=False):
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_save_capture")
-    log_entry = f"wps_save_capture: {data}"
+
+    _parsed, result_str = _wait_for_command_result(
+        handle,
+        expected_cmd="SAVE CAPTURE",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_save_capture",
+    )
+    log_entry = f"wps_save_capture: {result_str}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
@@ -770,8 +870,15 @@ def wps_export_pcapng(handle, pcapng_absolute_filename, tech='LE', mode=0, show_
         print(log_entry)
 
     s.send(send_data)
-    data = _recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_export_pcapng")
-    log_entry = f"wps_export_pcapng_du: {data}"
+
+    _parsed, result_str = _wait_for_command_result(
+        handle,
+        expected_cmd="PCAPNG EXPORT",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_export_pcapng",
+    )
+    log_entry = f"wps_export_pcapng_du: {result_str}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
@@ -795,8 +902,15 @@ def wps_export_spectrum(handle,spectrum_absolute_filename, show_log=False):
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_export_spectrum")
-    log_entry = f"wps_export_spectrum: {data}"
+
+    _parsed, result_str = _wait_for_command_result(
+        handle,
+        expected_cmd="SPECTRUM EXPORT",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_export_spectrum",
+    )
+    log_entry = f"wps_export_spectrum: {result_str}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
@@ -856,8 +970,15 @@ def wps_export_audio(handle,audio_absolute_filename,audio_streams="1",audio_requ
         print(log_entry)
 
     s.send(send_data)
-    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_export_audio")
-    log_entry = f"wps_export_audio: {data}"
+
+    _parsed, result_str = _wait_for_command_result(
+        handle,
+        expected_cmd="PLUGIN COMMAND",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_export_audio",
+    )
+    log_entry = f"wps_export_audio: {result_str}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
@@ -887,8 +1008,15 @@ def wps_add_bookmark(handle, bookmark_frame, bookmark_text, show_log=False):
         print(log_entry)
 
     s.send(send_data)
-    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_add_bookmark")
-    log_entry = f"wps_add_bookmark: {data}"
+
+    _parsed, result_str = _wait_for_command_result(
+        handle,
+        expected_cmd="ADD BOOKMARK",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_add_bookmark",
+    )
+    log_entry = f"wps_add_bookmark: {result_str}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
