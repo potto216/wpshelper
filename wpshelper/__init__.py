@@ -234,7 +234,7 @@ def wps_open(
     :param int tcp_port: Port of the automation server.
     :param int max_to_read: Maximum bytes to read from the socket at once.
     :param str wps_executable_path: Full path to the FTSAutoServer executable.
-    :param str personality_key: Personality key for the hardware.
+    :param str personality_key: Personality key for the hardware. Current valid values are "SODERA", "X240", "X500", "X500e","VIEW".
     :param int sleep_time: Seconds to sleep between polling attempts.
     :param int max_wait_time: Max seconds to wait before timing out.
     :param int recv_retry_attempts: Number of recv retries on timeout.
@@ -250,6 +250,8 @@ def wps_open(
         raise ValueError("wps_executable_path must be a non-empty string.")
     if personality_key is None or not str(personality_key):
         raise ValueError("personality_key must be a non-empty string.")
+    elif personality_key not in ("SODERA", "X240", "X500", "X500e","VIEW"):
+        raise ValueError("personality_key must be one of: 'SODERA', 'X240', 'X500', 'X500e', 'VIEW'.")
 
     handle={
         'max_data_from_automation_server':max_to_read,
