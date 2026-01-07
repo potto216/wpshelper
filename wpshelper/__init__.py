@@ -618,42 +618,51 @@ def wps_open_capture(handle, capture_absolute_filename, show_log=False):
         print(log_entry)
     s.send(send_data)
 
-    # Wait for the final confirmation (not Reason=yes)
+    # Opening large captures can take longer than the socket timeout.
+    # Keep polling until we see the final "OPEN CAPTURE FILE;SUCCEEDED" response
+    # (ignoring interim notifications like Reason=yes), or until max_wait_time.
     start_time = time.monotonic()
-    EXPECTED_COMMAND_OC = "OPEN CAPTURE FILE"
-    EXPECTED_STATUS_OC = "SUCCEEDED"
-    EXPECTED_REASON_OC_INTERIM = b"Reason=yes"
-    final_response_received = False
-    while not final_response_received:
-        if time.monotonic() - start_time > handle['max_wait_time']:
-            error_msg = f"wps_open_capture: Timeout waiting for final confirmation (not '{EXPECTED_REASON_OC_INTERIM}') after {handle['max_wait_time']} seconds."
+    expected_cmd = "OPEN CAPTURE FILE"
+    max_wait = handle.get('max_wait_time', 60)
+
+    while True:
+        if time.monotonic() - start_time > max_wait:
+            error_msg = (
+                f"wps_open_capture: Timeout waiting for '{expected_cmd} SUCCEEDED' "
+                f"after {max_wait} seconds."
+            )
             handle['log'].append(error_msg)
-            if show_log: print(error_msg)
+            if show_log:
+                print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_open_capture")
-        log_entry = f"wps_open_capture: {data}"
-        handle['log'].append(log_entry)
-        if show_log:
-            print(log_entry)
+        ok, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
 
-        # Check if it's the interim "yes" response or the final one
-        if EXPECTED_REASON_OC_INTERIM in data:
-            # Still waiting, reset timer slightly or just continue loop
-            time.sleep(handle['sleep_time'] / 2) # Sleep briefly even on interim response
-        else:
-            # Assume any response not containing "Reason=yes" is the final one
-            # Ideally, parse it to confirm "OPEN CAPTURE FILE;SUCCEEDED"
-            result_str = data.decode()
-            result_parse = result_str.split(';')
-            if len(result_parse) > 1 and result_parse[0] == EXPECTED_COMMAND_OC and result_parse[1] == EXPECTED_STATUS_OC:
-                final_response_received = True
-            else:
-                # Log unexpected final response but break loop anyway? Or raise error?
-                log_entry = f"wps_open_capture: Received unexpected final response: {result_str}. Assuming completion."
-                handle['log'].append(log_entry)
-                if show_log: print(log_entry)
-                final_response_received = True # Treat as complete to avoid infinite loop
+        # Socket timeout: keep waiting until max_wait_time.
+        if result_parse is None:
+            continue
+
+        # Unexpected/async message: ignore and keep waiting.
+        if len(result_parse) == 0 or result_parse[0] != expected_cmd:
+            log_entry = f"wps_open_capture: ignoring unexpected response: {result_str}"
+            handle['log'].append(log_entry)
+            if show_log:
+                print(log_entry)
+            continue
+
+        status = result_parse[1] if len(result_parse) > 1 else None
+        if status == "FAILED":
+            raise RuntimeError(f"wps_open_capture: {result_str}")
+        if status != "SUCCEEDED":
+            time.sleep(handle.get('sleep_time', 1))
+            continue
+
+        reason_field = result_parse[3] if len(result_parse) > 3 else ""
+        if isinstance(reason_field, str) and "reason=yes" in reason_field.lower():
+            time.sleep(handle.get('sleep_time', 1) / 2)
+            continue
+
+        return
 
 
 def wps_save_capture(handle, capture_absolute_filename, show_log=False):
@@ -1071,20 +1080,52 @@ def wps_close(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep
         print(log_entry)
 
     s.send(send_data)
-    data=_recv_with_retries(
-        handle,
-        MAX_TO_READ,
-        retry_attempts=recv_retry_attempts,
-        retry_sleep=recv_retry_sleep,
-        show_log=show_log,
-        context="wps_close",
-    )
-    log_entry = f"wps_close: {data}"
-    handle['log'].append(log_entry)
-    if show_log:
-        print(log_entry)
 
-    s.close()
+    # Best-effort shutdown: don't crash cleanup on recv timeouts.
+    start_time = time.monotonic()
+    expected_cmd = "STOP FTS"
+    max_wait = handle.get('max_wait_time', 60)
+
+    while True:
+        if time.monotonic() - start_time > max_wait:
+            log_entry = (
+                f"wps_close: Timeout waiting for '{expected_cmd} SUCCEEDED' after {max_wait} seconds; closing socket anyway."
+            )
+            handle['log'].append(log_entry)
+            if show_log:
+                print(log_entry)
+            break
+
+        try:
+            data = _recv_with_retries(
+                handle,
+                MAX_TO_READ,
+                retry_attempts=recv_retry_attempts,
+                retry_sleep=recv_retry_sleep,
+                show_log=show_log,
+                context="wps_close",
+            )
+        except (socket.timeout, TimeoutError):
+            continue
+
+        log_entry = f"wps_close: {data}"
+        handle['log'].append(log_entry)
+        if show_log:
+            print(log_entry)
+
+        try:
+            result_str = data.decode(errors='replace')
+        except Exception:
+            break
+
+        result_parse = result_str.split(';')
+        if len(result_parse) >= 2 and result_parse[0] == expected_cmd:
+            break
+
+    try:
+        s.close()
+    except OSError:
+        pass
 
 # source_node_id is a 64 bit hex number starting with 0x
 # session_keys is a list of 128 bit hex numbers starting with 0x

@@ -5,8 +5,11 @@ import pytest
 from tests.mock_tcp import MockAutomationSimulator
 from wpshelper import (
     _recv_and_parse,
+    WPSTimeoutError,
+    wps_close,
     wps_export_html,
     wps_find_installations,
+    wps_open_capture,
     wps_update_matter_keys,
 )
 
@@ -120,3 +123,21 @@ def test_wps_find_installations_handles_missing_directory(tmp_path):
 
     assert result["installations"] == []
     assert result["latest"] is None
+
+
+def test_wps_open_capture_waits_until_max_wait_time_then_raises_wpstimeouterror():
+    with MockAutomationSimulator() as simulator:
+        handle = simulator.create_handle(timeout=0.01)
+        handle["max_wait_time"] = 0.05
+
+        with pytest.raises(WPSTimeoutError):
+            wps_open_capture(handle, "C:\\temp\\large.cfax")
+
+
+def test_wps_close_is_best_effort_on_timeouts():
+    with MockAutomationSimulator() as simulator:
+        handle = simulator.create_handle(timeout=0.01)
+        handle["max_wait_time"] = 0.05
+
+        # Should not raise even if the server never responds.
+        wps_close(handle)
