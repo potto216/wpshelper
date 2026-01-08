@@ -192,7 +192,7 @@ def _wait_for_command_result(
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        ok, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+        _, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
 
         # Socket timeout: keep waiting until max_wait_time.
         if result_parse is None:
@@ -636,7 +636,7 @@ def wps_open_capture(handle, capture_absolute_filename, show_log=False):
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        ok, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+        _, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
 
         # Socket timeout: keep waiting until max_wait_time.
         if result_parse is None:
@@ -1098,7 +1098,7 @@ def wps_set_resolving_list(handle, address_list=None, show_log=False):
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        ok, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+        _, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
 
         if result_parse is None:
             continue
@@ -1113,6 +1113,138 @@ def wps_set_resolving_list(handle, address_list=None, show_log=False):
         status = result_parse[1] if len(result_parse) > 1 else None
         reason = result_parse[3] if len(result_parse) > 3 else ""
         log_entry = f"wps_set_resolving_list: {result_str}"
+        handle['log'].append(log_entry)
+        if show_log:
+            print(log_entry)
+
+        if status in ("SUCCEEDED", "FAILED"):
+            return reason
+
+        time.sleep(handle.get('sleep_time', 1))
+
+def wps_wireless_devices(handle, action, action_parameters=None, show_log=False):
+    """
+    Send a Wireless Devices command and return the response reason.
+
+    Command format:
+    "Wireless Devices;<action>;<action parameters>"
+
+    Valid actions and parameters:
+    - browse: type=<bluetooth|wifi>
+    - detail: type=<bluetooth|wifi>;address=<device address>
+    - select: type=<bluetooth|wifi>;address=<device address|all>;select=<yes|no>;favorite=<yes|no>
+    - add: address=<device address>;type=<bluetooth|wifi>;lerandom=<yes|no>;irk=<device IRK>;
+        select=<yes|no>;favorite=<yes|no>
+    - nickname: address=<device address>;type=<bluetooth|wifi>;nickname="<nickname>"
+    - delete: address=<device address>;type=<bluetooth|wifi>
+
+    :param dict handle: Connection handle returned by wps_open().
+    :param str action: Wireless Devices action (browse, detail, select, add, nickname, delete).
+    :param dict|list|tuple|str|None action_parameters: Parameters to append after the action.
+        When a dict is provided, parameters are formatted as key=value pairs joined by ";".
+        When a list/tuple is provided, entries may be "key=value" strings or (key, value) pairs.
+    :param bool show_log: If True, print send/receive log.
+    :returns: Reason string from the analyzer response, or "" if not supplied.
+    :raises ValueError: On invalid handle, action, or parameters.
+    :raises WPSTimeoutError: If the command does not complete before handle['max_wait_time'].
+    """
+    if not isinstance(handle, dict) or "socket" not in handle:
+        raise ValueError("Invalid handle provided. Must be a dict returned by wps_open().")
+    if not isinstance(action, str) or not action.strip():
+        raise ValueError("action must be a non-empty string.")
+
+    def _format_params(params):
+        if params is None:
+            return ""
+        if isinstance(params, str):
+            return params.strip()
+        if isinstance(params, dict):
+            return ";".join(f"{key}={value}" for key, value in params.items())
+        if isinstance(params, (list, tuple)):
+            formatted = []
+            for item in params:
+                if isinstance(item, str):
+                    formatted.append(item)
+                elif isinstance(item, (list, tuple)) and len(item) == 2:
+                    formatted.append(f"{item[0]}={item[1]}")
+                else:
+                    raise ValueError(
+                        "action_parameters list entries must be 'key=value' strings or (key, value) pairs."
+                    )
+            return ";".join(formatted)
+        raise ValueError("action_parameters must be a dict, list/tuple, string, or None.")
+
+    param_text = _format_params(action_parameters)
+    if action.strip().lower() == "select" and action_parameters is not None:
+        address_pattern = re.compile(r"^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$")
+        if isinstance(action_parameters, dict):
+            address_value = action_parameters.get("address")
+            select_value = action_parameters.get("select")
+            favorite_value = action_parameters.get("favorite")
+        else:
+            address_value = None
+            select_value = None
+            favorite_value = None
+            for entry in param_text.split(";") if param_text else []:
+                if "=" not in entry:
+                    continue
+                key, value = entry.split("=", 1)
+                key = key.strip()
+                if key == "address":
+                    address_value = value
+                elif key == "select":
+                    select_value = value
+                elif key == "favorite":
+                    favorite_value = value
+
+        if address_value is not None and address_value != "all" and not address_pattern.match(address_value):
+            raise ValueError("select action address must be a device address or 'all'.")
+        if select_value is not None and select_value not in {"yes", "no"}:
+            raise ValueError("select action select value must be 'yes' or 'no'.")
+        if favorite_value is not None and favorite_value not in {"yes", "no"}:
+            raise ValueError("select action favorite value must be 'yes' or 'no'.")
+    FTE_CMD = f"Wireless Devices;{action.strip()}"
+    if param_text:
+        FTE_CMD = f"{FTE_CMD};{param_text}"
+
+    send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
+    log_entry = f"wps_wireless_devices: sending: {send_data}"
+    handle['log'].append(log_entry)
+    if show_log:
+        print(log_entry)
+
+    handle['socket'].send(send_data)
+
+    start_time = time.monotonic()
+    expected_cmd = "WIRELESS DEVICES"
+    max_wait = handle.get('max_wait_time', 60)
+
+    while True:
+        if time.monotonic() - start_time > max_wait:
+            error_msg = (
+                f"wps_wireless_devices: Timeout waiting for '{expected_cmd}' "
+                f"after {max_wait} seconds."
+            )
+            handle['log'].append(error_msg)
+            if show_log:
+                print(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
+
+        _, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+
+        if result_parse is None:
+            continue
+
+        if len(result_parse) == 0 or result_parse[0] != expected_cmd:
+            log_entry = f"wps_wireless_devices: ignoring unexpected response: {result_str}"
+            handle['log'].append(log_entry)
+            if show_log:
+                print(log_entry)
+            continue
+
+        status = result_parse[1] if len(result_parse) > 1 else None
+        reason = result_parse[2] if len(result_parse) > 3 else ""
+        log_entry = f"wps_wireless_devices: {result_str}"
         handle['log'].append(log_entry)
         if show_log:
             print(log_entry)
