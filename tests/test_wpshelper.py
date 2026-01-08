@@ -12,6 +12,7 @@ from wpshelper import (
     wps_open_capture,
     wps_set_resolving_list,
     wps_update_matter_keys,
+    wps_wireless_devices,
 )
 
 
@@ -141,6 +142,59 @@ def test_wps_set_resolving_list_returns_reason_on_failure():
         reason = wps_set_resolving_list(handle, ["0x001122334455"])
 
         assert reason == "resolving_list_set=none|resolving_list_error=error0\r\n"
+
+
+def test_wps_wireless_devices_sends_expected_command_and_parses_reason():
+    with MockAutomationSimulator(
+        responses=[b"WIRELESS DEVICES;SUCCEEDED;REASON=ok;123\r\n"]
+    ) as simulator:
+        handle = simulator.create_handle()
+
+        reason = wps_wireless_devices(handle, "browse", {"type": "wifi"})
+
+        sent_command = simulator.received[0].decode()
+        assert sent_command == "Wireless Devices;browse;type=wifi"
+        assert reason == "REASON=ok"
+
+
+def test_wps_wireless_devices_returns_empty_reason_when_missing():
+    with MockAutomationSimulator(responses=[b"WIRELESS DEVICES;SUCCEEDED;123\r\n"]) as simulator:
+        handle = simulator.create_handle()
+
+        reason = wps_wireless_devices(handle, "browse", "type=bluetooth")
+
+        assert reason == ""
+
+
+def test_wps_wireless_devices_select_rejects_invalid_address():
+    with MockAutomationSimulator(responses=[b"WIRELESS DEVICES;SUCCEEDED;123\r\n"]) as simulator:
+        handle = simulator.create_handle()
+
+        with pytest.raises(ValueError, match="device address"):
+            wps_wireless_devices(
+                handle,
+                "select",
+                {"type": "wifi", "address": "invalid", "select": "yes", "favorite": "no"},
+            )
+
+
+def test_wps_wireless_devices_select_rejects_invalid_flags():
+    with MockAutomationSimulator(responses=[b"WIRELESS DEVICES;SUCCEEDED;123\r\n"]) as simulator:
+        handle = simulator.create_handle()
+
+        with pytest.raises(ValueError, match="select value"):
+            wps_wireless_devices(
+                handle,
+                "select",
+                {"type": "wifi", "address": "all", "select": "maybe", "favorite": "no"},
+            )
+
+        with pytest.raises(ValueError, match="favorite value"):
+            wps_wireless_devices(
+                handle,
+                "select",
+                {"type": "wifi", "address": "all", "select": "yes", "favorite": "maybe"},
+            )
 
 
 def test_wps_set_resolving_list_rejects_invalid_address():
