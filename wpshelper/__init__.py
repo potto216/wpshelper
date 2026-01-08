@@ -1032,6 +1032,96 @@ def wps_add_bookmark(handle, bookmark_frame, bookmark_text, show_log=False):
     if show_log:
         print(log_entry)
 
+# Set Resolving List
+def wps_set_resolving_list(handle, address_list=None, show_log=False):
+    """
+    Set the resolving list for BR/EDR device address resolution.
+
+    Command format:
+    "Set Resolving List;<address list>"
+
+    The address list can be:
+    - A comma-separated list of BD_ADDR values (e.g., "0x001122334455,0xAABBCCDDEEFF")
+    - An empty list to clear the resolving list.
+
+    :param dict handle: Connection handle returned by wps_open().
+    :param list|tuple|str|None address_list: BD_ADDR list or comma-separated string. Use None/""/[]
+        to clear the list.
+    :param bool show_log: If True, print send/receive log.
+    :returns: Reason string from the analyzer response.
+    :raises ValueError: On invalid handle or address list values.
+    :raises WPSTimeoutError: If the command does not complete before handle['max_wait_time'].
+    """
+    if not isinstance(handle, dict) or "socket" not in handle:
+        raise ValueError("Invalid handle provided. Must be a dict returned by wps_open().")
+
+    def _normalize_addresses(value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            if value.strip() == "":
+                return []
+            parts = [part.strip() for part in value.split(",") if part.strip() != ""]
+            return parts
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        raise ValueError("address_list must be a list, tuple, comma-separated string, or None.")
+
+    addresses = _normalize_addresses(address_list)
+    addr_pattern = re.compile(r"^0x[0-9A-Fa-f]{12}$")
+    for addr in addresses:
+        if not isinstance(addr, str) or not addr_pattern.match(addr):
+            raise ValueError("Each BD_ADDR must be a hex string like '0x001122334455'.")
+
+    address_field = ",".join(addresses)
+    FTE_CMD = f"Set Resolving List;{address_field}"
+    send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
+    log_entry = f"wps_set_resolving_list: sending: {send_data}"
+    handle['log'].append(log_entry)
+    if show_log:
+        print(log_entry)
+
+    handle['socket'].send(send_data)
+
+    start_time = time.monotonic()
+    expected_cmd = "SET RESOLVING LIST"
+    max_wait = handle.get('max_wait_time', 60)
+
+    while True:
+        if time.monotonic() - start_time > max_wait:
+            error_msg = (
+                f"wps_set_resolving_list: Timeout waiting for '{expected_cmd}' "
+                f"after {max_wait} seconds."
+            )
+            handle['log'].append(error_msg)
+            if show_log:
+                print(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
+
+        ok, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+
+        if result_parse is None:
+            continue
+
+        if len(result_parse) == 0 or result_parse[0] != expected_cmd:
+            log_entry = f"wps_set_resolving_list: ignoring unexpected response: {result_str}"
+            handle['log'].append(log_entry)
+            if show_log:
+                print(log_entry)
+            continue
+
+        status = result_parse[1] if len(result_parse) > 1 else None
+        reason = result_parse[3] if len(result_parse) > 3 else ""
+        log_entry = f"wps_set_resolving_list: {result_str}"
+        handle['log'].append(log_entry)
+        if show_log:
+            print(log_entry)
+
+        if status in ("SUCCEEDED", "FAILED"):
+            return reason
+
+        time.sleep(handle.get('sleep_time', 1))
+
 # This is used to send a general command to the WPS
 def wps_send_command(handle, full_command, show_log=False):
     """
