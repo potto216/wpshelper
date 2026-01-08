@@ -10,6 +10,7 @@ from wpshelper import (
     wps_export_html,
     wps_find_installations,
     wps_open_capture,
+    wps_set_resolving_list,
     wps_update_matter_keys,
 )
 
@@ -101,6 +102,55 @@ def test_wps_update_matter_keys_rejects_invalid_inputs():
 
         with pytest.raises(ValueError, match="session_keys must be a list"):
             wps_update_matter_keys(handle, "0x1", "0x2")
+
+
+def test_wps_set_resolving_list_sends_expected_command():
+    with MockAutomationSimulator(
+        responses=[b"SET RESOLVING LIST;SUCCEEDED;123;resolving_list_set=all|0x001122334455\r\n"]
+    ) as simulator:
+        handle = simulator.create_handle()
+
+        reason = wps_set_resolving_list(handle, ["0x001122334455", "0xAABBCCDDEEFF"])
+
+        sent_command = simulator.received[0].decode()
+        assert sent_command == "Set Resolving List;0x001122334455,0xAABBCCDDEEFF"
+        assert reason == "resolving_list_set=all|0x001122334455\r\n"
+
+
+def test_wps_set_resolving_list_allows_clear():
+    with MockAutomationSimulator(
+        responses=[b"SET RESOLVING LIST;SUCCEEDED;123;resolving_list_set=clear\r\n"]
+    ) as simulator:
+        handle = simulator.create_handle()
+
+        reason = wps_set_resolving_list(handle, "")
+
+        sent_command = simulator.received[0].decode()
+        assert sent_command == "Set Resolving List;"
+        assert reason == "resolving_list_set=clear\r\n"
+
+
+def test_wps_set_resolving_list_returns_reason_on_failure():
+    with MockAutomationSimulator(
+        responses=[
+            b"SET RESOLVING LIST;FAILED;123;resolving_list_set=none|resolving_list_error=error0\r\n"
+        ]
+    ) as simulator:
+        handle = simulator.create_handle()
+
+        reason = wps_set_resolving_list(handle, ["0x001122334455"])
+
+        assert reason == "resolving_list_set=none|resolving_list_error=error0\r\n"
+
+
+def test_wps_set_resolving_list_rejects_invalid_address():
+    with MockAutomationSimulator(
+        responses=[b"SET RESOLVING LIST;FAILED;123;resolving_list_set=none\r\n"]
+    ) as simulator:
+        handle = simulator.create_handle()
+
+        with pytest.raises(ValueError, match="BD_ADDR"):
+            wps_set_resolving_list(handle, ["0x1234"])
 
 
 def test_wps_find_installations_returns_latest(tmp_path):
