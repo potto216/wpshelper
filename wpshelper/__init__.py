@@ -95,7 +95,18 @@ def wps_find_installations(
     }
 
 
-def _recv_and_parse(handle, expected_cmd=None, expected_status=None, expected_reason=None, show_log=False):
+def _recv_and_parse(
+    handle,
+    expected_cmd=None,
+    expected_status=None,
+    expected_reason=None,
+    show_log=False,
+    *,
+    retry_attempts=None,
+    retry_sleep=None,
+    decode_errors="strict",
+    context="",
+):
     """Receive data from the socket, decode and split by ';'.
 
     If expected_cmd / expected_status / expected_reason are provided, this
@@ -106,7 +117,17 @@ def _recv_and_parse(handle, expected_cmd=None, expected_status=None, expected_re
     max_to_read = handle["max_data_from_automation_server"]
 
     try:
-        rcv_data = s.recv(max_to_read)
+        if retry_attempts is None and retry_sleep is None:
+            rcv_data = s.recv(max_to_read)
+        else:
+            rcv_data = _recv_with_retries(
+                handle,
+                max_to_read,
+                retry_attempts=retry_attempts,
+                retry_sleep=retry_sleep,
+                show_log=show_log,
+                context=context or "_recv_and_parse",
+            )
     except (socket.timeout, TimeoutError) as e:
         log_entry = f"_recv_and_parse: Socket receive timed out: {e}"
         handle["log"].append(log_entry)
@@ -114,7 +135,7 @@ def _recv_and_parse(handle, expected_cmd=None, expected_status=None, expected_re
             print(log_entry)
         return False, None, None
 
-    result_str = rcv_data.decode()
+    result_str = rcv_data.decode(errors=decode_errors)
     result_parse = result_str.split(";")
 
     log_entry = f"_recv_and_parse: {result_str}"
@@ -167,6 +188,9 @@ def _wait_for_command_result(
     expected_status: str = "SUCCEEDED",
     show_log: bool = False,
     context: str = "",
+    retry_attempts=None,
+    retry_sleep=None,
+    decode_errors="strict",
 ):
     """Wait up to handle['max_wait_time'] for a specific command result.
 
@@ -192,7 +216,14 @@ def _wait_for_command_result(
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        _, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+        _, result_parse, result_str = _recv_and_parse(
+            handle,
+            show_log=show_log,
+            retry_attempts=retry_attempts,
+            retry_sleep=retry_sleep,
+            decode_errors=decode_errors,
+            context=context or expected_cmd,
+        )
 
         # Socket timeout: keep waiting until max_wait_time.
         if result_parse is None:
@@ -484,11 +515,14 @@ def wps_stop_record(handle, show_log=False):
         if show_log:
             print(log_entry)
 
-def wps_analyze_capture(handle, show_log=False):
+def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep=None):
     """
     Analyze the capture on the WPS (start, poll until complete, stop).
 
     :param dict handle: Connection handle returned by wps_open().
+    :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     :raises WPSTimeoutError: If any polling stage times out.
     """    
@@ -501,7 +535,16 @@ def wps_analyze_capture(handle, show_log=False):
     handle['log'].append(log_entry)
     s.send(send_data)
 
-    ok, result_parse, result_str = _recv_and_parse(handle, "START ANALYZE", "SUCCEEDED", show_log=show_log)
+    ok, result_parse, result_str = _recv_and_parse(
+        handle,
+        "START ANALYZE",
+        "SUCCEEDED",
+        show_log=show_log,
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        decode_errors="replace",
+        context="wps_analyze_capture:start",
+    )
     if not ok:
         log_entry = f"wps_analyze_capture: ERROR failed to start analysis with a parsed value of: {result_parse}"
         handle['log'].append(log_entry)
@@ -526,7 +569,17 @@ def wps_analyze_capture(handle, show_log=False):
         handle['log'].append(log_entry)
         s.send(send_data)
 
-        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND_AC, EXPECTED_STATUS_AC, EXPECTED_REASON_AC, show_log=show_log)
+        ok, result_parse, result_str = _recv_and_parse(
+            handle,
+            EXPECTED_COMMAND_AC,
+            EXPECTED_STATUS_AC,
+            EXPECTED_REASON_AC,
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+            decode_errors="replace",
+            context="wps_analyze_capture:is_analyze_complete",
+        )
         if ok:
             is_done_waiting=True
         else:
@@ -540,7 +593,14 @@ def wps_analyze_capture(handle, show_log=False):
     log_entry = f"wps_analyze_capture: sending: {send_data}"
     handle['log'].append(log_entry)
     s.send(send_data)
-    _ok, _parsed, result_str = _recv_and_parse(handle, show_log=show_log)
+    _ok, _parsed, result_str = _recv_and_parse(
+        handle,
+        show_log=show_log,
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        decode_errors="replace",
+        context="wps_analyze_capture:stop_analyze",
+    )
 
     # • Query State
     start_time = time.monotonic()
@@ -561,7 +621,16 @@ def wps_analyze_capture(handle, show_log=False):
         log_entry = f"wps_analyze_capture: sending: {send_data}"
         s.send(send_data)
 
-        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND_QS, EXPECTED_STATUS_QS, show_log=show_log)
+        ok, result_parse, result_str = _recv_and_parse(
+            handle,
+            EXPECTED_COMMAND_QS,
+            EXPECTED_STATUS_QS,
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+            decode_errors="replace",
+            context="wps_analyze_capture:query_state",
+        )
         if ok and len(result_parse) > 3 and (result_parse[3]==EXPECTED_REASON_QS1 or result_parse[3]==EXPECTED_REASON_QS2):
             is_done_waiting=True
         else:
@@ -588,7 +657,17 @@ def wps_analyze_capture(handle, show_log=False):
         handle['log'].append(log_entry)
         s.send(send_data)
 
-        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND_PC, EXPECTED_STATUS_PC, EXPECTED_REASON_PC, show_log=show_log)
+        ok, result_parse, result_str = _recv_and_parse(
+            handle,
+            EXPECTED_COMMAND_PC,
+            EXPECTED_STATUS_PC,
+            EXPECTED_REASON_PC,
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+            decode_errors="replace",
+            context="wps_analyze_capture:is_processing_complete",
+        )
         if ok:
             is_done_waiting=True
         else:
@@ -702,6 +781,8 @@ def wps_export_html(
         handle,
         html_absolute_filename=None,
         show_log=False,
+        recv_retry_attempts=None,
+        recv_retry_sleep=None,
         *,
         summary=0,
         databytes=1,
@@ -750,6 +831,8 @@ def wps_export_html(
     :param str html_absolute_filename: Output HTML file path (optional). If only a filename is
         provided, the analyzer prepends its configured log directory.
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
 
     :param int summary: 0/1 (see above).
     :param int databytes: 0/1 (see above).
@@ -844,7 +927,15 @@ def wps_export_html(
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        ok, result_parse, result_str = _recv_and_parse(handle, expected_cmd=EXPECTED_COMMAND, show_log=show_log)
+        ok, result_parse, result_str = _recv_and_parse(
+            handle,
+            expected_cmd=EXPECTED_COMMAND,
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+            decode_errors="replace",
+            context="wps_export_html",
+        )
         if not ok:
             time.sleep(handle['sleep_time'])
             continue
@@ -859,7 +950,15 @@ def wps_export_html(
         # Unknown/intermediate status; keep waiting.
         time.sleep(handle['sleep_time'])
 
-def wps_export_pcapng(handle, pcapng_absolute_filename, tech='LE', mode=0, show_log=False):
+def wps_export_pcapng(
+    handle,
+    pcapng_absolute_filename,
+    tech='LE',
+    mode=0,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Export capture data as PCAPNG.
 
@@ -868,6 +967,8 @@ def wps_export_pcapng(handle, pcapng_absolute_filename, tech='LE', mode=0, show_
     :param str tech: Technology filter (default 'LE').
     :param int mode: Mode parameter (default 0).
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -888,19 +989,30 @@ def wps_export_pcapng(handle, pcapng_absolute_filename, tech='LE', mode=0, show_
         expected_status="SUCCEEDED",
         show_log=show_log,
         context="wps_export_pcapng",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        decode_errors="replace",
     )
     log_entry = f"wps_export_pcapng_du: {result_str}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
 
-def wps_export_spectrum(handle,spectrum_absolute_filename, show_log=False):
+def wps_export_spectrum(
+    handle,
+    spectrum_absolute_filename,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Export spectrum data from the capture.
 
     :param dict handle: Connection handle returned by wps_open().
     :param str spectrum_absolute_filename: Output spectrum file path.
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -920,6 +1032,9 @@ def wps_export_spectrum(handle,spectrum_absolute_filename, show_log=False):
         expected_status="SUCCEEDED",
         show_log=show_log,
         context="wps_export_spectrum",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        decode_errors="replace",
     )
     log_entry = f"wps_export_spectrum: {result_str}"
     handle['log'].append(log_entry)
@@ -957,7 +1072,16 @@ def wps_get_available_streams_audio(handle,parameters="No", show_log=False):
     return data
 
 # This exports audio data from a capture
-def wps_export_audio(handle,audio_absolute_filename,audio_streams="1",audio_requestTypes="CSV&WAV",audio_time="all", show_log=False):
+def wps_export_audio(
+    handle,
+    audio_absolute_filename,
+    audio_streams="1",
+    audio_requestTypes="CSV&WAV",
+    audio_time="all",
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Export audio data from the capture.
 
@@ -967,6 +1091,8 @@ def wps_export_audio(handle,audio_absolute_filename,audio_streams="1",audio_requ
     :param str audio_requestTypes: Request types (default "CSV&WAV").
     :param str audio_time: Time range (default "all").
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -988,6 +1114,9 @@ def wps_export_audio(handle,audio_absolute_filename,audio_streams="1",audio_requ
         expected_status="SUCCEEDED",
         show_log=show_log,
         context="wps_export_audio",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        decode_errors="replace",
     )
     log_entry = f"wps_export_audio: {result_str}"
     handle['log'].append(log_entry)
