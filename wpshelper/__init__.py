@@ -777,6 +777,46 @@ def wps_save_capture(handle, capture_absolute_filename, show_log=False):
     if show_log:
         print(log_entry)
 
+
+def wps_close_capture(handle, capture_absolute_filename=None, show_log=False):
+    """
+    Close the current capture file.
+
+    Command format:
+    "Close Capture File;<capture file path>"
+
+    If the capture file path is omitted, any changes to the open file are discarded.
+    If provided, the file cannot be overwritten.
+
+    Response format:
+    "CLOSE CAPTURE FILE ;<status>;<timestamp>;[<reason>]"
+    (A reason is supplied only for FAILED status.)
+    """
+    s = handle['socket']
+    MAX_TO_READ = handle['max_data_from_automation_server']
+
+    FTE_CMD = "Close Capture File"
+    if capture_absolute_filename is not None and str(capture_absolute_filename) != "":
+        FTE_CMD = f"{FTE_CMD};{capture_absolute_filename}"
+    send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
+    log_entry = f"wps_close_capture: sending: {send_data}"
+    handle['log'].append(log_entry)
+    if show_log:
+        print(log_entry)
+    s.send(send_data)
+
+    _parsed, result_str = _wait_for_command_result(
+        handle,
+        expected_cmd="CLOSE CAPTURE FILE",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_close_capture",
+    )
+    log_entry = f"wps_close_capture: {result_str}"
+    handle['log'].append(log_entry)
+    if show_log:
+        print(log_entry)
+
 def wps_export_html(
         handle,
         html_absolute_filename=None,
