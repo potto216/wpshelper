@@ -993,7 +993,7 @@ def wps_export_html(
 def wps_export_pcapng(
     handle,
     pcapng_absolute_filename,
-    technology_filter='LE',
+    tech='LE',
     mode=0,
     show_log=False,
     recv_retry_attempts=None,
@@ -1004,7 +1004,7 @@ def wps_export_pcapng(
 
     :param dict handle: Connection handle returned by wps_open().
     :param str pcapng_absolute_filename: Output PCAPNG file path.
-    :param str technology_filter: Technology filter (default 'LE').
+    :param str tech: Technology filter [Classic, LE, 80211, WPAN] (default 'LE').
     :param int mode: Mode parameter (default 0).
     :param bool show_log: If True, print send/receive log.
     :param int recv_retry_attempts: Override handle recv retry attempts for this call.
@@ -1014,7 +1014,7 @@ def wps_export_pcapng(
     s = handle['socket']
     MAX_TO_READ = handle['max_data_from_automation_server']
     # Save Capture – Wait until status has been reported.
-    FTE_CMD = f"PCAPNG Export;file={pcapng_absolute_filename};technology_filter={technology_filter};mode={mode}"
+    FTE_CMD = f"PCAPNG Export;file={pcapng_absolute_filename};tech={tech};mode={mode}"
     send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
     log_entry = f"wps_export_pcapng_du: sending: {send_data}"
     handle['log'].append(log_entry)
