@@ -6,6 +6,8 @@ from tests.mock_tcp import MockAutomationSimulator
 from wpshelper import (
     _recv_and_parse,
     WPSTimeoutError,
+    wps_analyze_capture_start,
+    wps_analyze_capture_stop,
     wps_close,
     wps_export_html,
     wps_find_installations,
@@ -245,3 +247,47 @@ def test_wps_close_is_best_effort_on_timeouts():
 
         # Should not raise even if the server never responds.
         wps_close(handle)
+
+
+def test_wps_analyze_capture_start_sends_expected_command_and_waits_for_success():
+    with MockAutomationSimulator(responses=[b"START ANALYZE;SUCCEEDED;Reason=ok\r\n"]) as simulator:
+        handle = simulator.create_handle()
+
+        wps_analyze_capture_start(handle)
+
+        sent_command = simulator.received[0].decode()
+        assert sent_command == "Start Analyze"
+
+
+def test_wps_analyze_capture_stop_runs_full_stop_sequence():
+    responses = [
+        # is analyze complete (not yet)
+        b"IS ANALYZE COMPLETE;SUCCEEDED;0;Reason=analyze_complete=no\r\n",
+        # is analyze complete (done)
+        b"IS ANALYZE COMPLETE;SUCCEEDED;0;Reason=analyze_complete=yes\r\n",
+        # stop analyze
+        b"STOP ANALYZE;SUCCEEDED;0;Reason=stopped\r\n",
+        # query state (not stopped)
+        b"QUERY STATE;SUCCEEDED;0;Reason=CAPTURE ACTIVE|CurrentState=CAPTURE ACTIVE\r\n",
+        # query state (stopped)
+        b"QUERY STATE;SUCCEEDED;0;Reason=CAPTURE STOPPED|CurrentState=CAPTURE STOPPED\r\n",
+        # is processing complete (not yet)
+        b"IS PROCESSING COMPLETE;SUCCEEDED;0;Reason=FALSE\r\n",
+        # is processing complete (done)
+        b"IS PROCESSING COMPLETE;SUCCEEDED;0;Reason=TRUE\r\n",
+    ]
+    with MockAutomationSimulator(responses=responses) as simulator:
+        handle = simulator.create_handle()
+
+        wps_analyze_capture_stop(handle)
+
+        sent = [data.decode() for data in simulator.received]
+        assert sent == [
+            "IS ANALYZE COMPLETE",
+            "IS ANALYZE COMPLETE",
+            "Stop Analyze",
+            "Query State",
+            "Query State",
+            "Is Processing Complete",
+            "Is Processing Complete",
+        ]

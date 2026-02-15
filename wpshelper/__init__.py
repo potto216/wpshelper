@@ -514,23 +514,22 @@ def wps_stop_record(handle, show_log=False):
         handle['log'].append(log_entry)
         if show_log:
             print(log_entry)
-
-def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep=None):
+def wps_analyze_capture_start(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep=None):
     """
-    Analyze the capture on the WPS (start, poll until complete, stop).
+    Start analysis on the WPS and wait for the START ANALYZE success response.
 
     :param dict handle: Connection handle returned by wps_open().
     :param bool show_log: If True, print send/receive log.
     :param int recv_retry_attempts: Override handle recv retry attempts for this call.
     :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
-    :raises WPSTimeoutError: If any polling stage times out.
-    """    
+    :raises RuntimeError: If start analyze does not succeed.
+    """
     s = handle['socket']
 
     # • Start Analyze
-    FTE_CMD="Start Analyze"
-    send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+    FTE_CMD = "Start Analyze"
+    send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
     log_entry = f"wps_analyze_capture: sending: {send_data}"
     handle['log'].append(log_entry)
     s.send(send_data)
@@ -546,9 +545,31 @@ def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_r
         context="wps_analyze_capture:start",
     )
     if not ok:
-        log_entry = f"wps_analyze_capture: ERROR failed to start analysis with a parsed value of: {result_parse}"
+        log_entry = (
+            f"wps_analyze_capture: ERROR failed to start analysis with a parsed value of: {result_parse}"
+        )
         handle['log'].append(log_entry)
         raise RuntimeError(f"Failed to start analysis: {result_str}")
+
+
+def wps_analyze_capture_stop(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep=None):
+    """
+    Wait for analysis completion, stop analysis, then wait for capture state and processing completion.
+
+    This performs:
+    - polling "IS ANALYZE COMPLETE" until Reason=analyze_complete=yes
+    - sending "Stop Analyze"
+    - polling "Query State" until CAPTURE STOPPED
+    - polling "Is Processing Complete" until Reason=TRUE
+
+    :param dict handle: Connection handle returned by wps_open().
+    :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
+    :returns: None
+    :raises WPSTimeoutError: If any polling stage times out.
+    """
+    s = handle['socket']
 
     # • Is Analyze Complete
     start_time = time.monotonic()
@@ -558,18 +579,22 @@ def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_r
     EXPECTED_REASON_AC = "Reason=analyze_complete=yes\r\n"
     while not is_done_waiting:
         if time.monotonic() - start_time > handle['max_wait_time']:
-            error_msg = f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_AC} {EXPECTED_STATUS_AC}' with reason '{EXPECTED_REASON_AC}' after {handle['max_wait_time']} seconds."
+            error_msg = (
+                f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_AC} {EXPECTED_STATUS_AC}' "
+                f"with reason '{EXPECTED_REASON_AC}' after {handle['max_wait_time']} seconds."
+            )
             handle['log'].append(error_msg)
-            if show_log: print(error_msg)
+            if show_log:
+                print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        FTE_CMD="IS ANALYZE COMPLETE"
-        send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+        FTE_CMD = "IS ANALYZE COMPLETE"
+        send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
         log_entry = f"wps_analyze_capture: sending: {send_data}"
         handle['log'].append(log_entry)
         s.send(send_data)
 
-        ok, result_parse, result_str = _recv_and_parse(
+        ok, result_parse, _result_str = _recv_and_parse(
             handle,
             EXPECTED_COMMAND_AC,
             EXPECTED_STATUS_AC,
@@ -581,19 +606,21 @@ def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_r
             context="wps_analyze_capture:is_analyze_complete",
         )
         if ok:
-            is_done_waiting=True
+            is_done_waiting = True
         else:
-            log_entry = f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
+            log_entry = (
+                f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
+            )
             handle['log'].append(log_entry)
             time.sleep(handle['sleep_time'])
 
     # • Stop Analyze
-    FTE_CMD="Stop Analyze"
-    send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+    FTE_CMD = "Stop Analyze"
+    send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
     log_entry = f"wps_analyze_capture: sending: {send_data}"
     handle['log'].append(log_entry)
     s.send(send_data)
-    _ok, _parsed, result_str = _recv_and_parse(
+    _ok, _parsed, _result_str = _recv_and_parse(
         handle,
         show_log=show_log,
         retry_attempts=recv_retry_attempts,
@@ -611,17 +638,21 @@ def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_r
     EXPECTED_REASON_QS2 = "Reason=CAPTURE STOPPED|CurrentState=CAPTURE ACTIVE NO DATA\r\n"
     while not is_done_waiting:
         if time.monotonic() - start_time > handle['max_wait_time']:
-            error_msg = f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_QS} {EXPECTED_STATUS_QS}' with reason '{EXPECTED_REASON_QS1}' or '{EXPECTED_REASON_QS2}' after {handle['max_wait_time']} seconds."
+            error_msg = (
+                f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_QS} {EXPECTED_STATUS_QS}' "
+                f"with reason '{EXPECTED_REASON_QS1}' or '{EXPECTED_REASON_QS2}' after {handle['max_wait_time']} seconds."
+            )
             handle['log'].append(error_msg)
-            if show_log: print(error_msg)
+            if show_log:
+                print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        FTE_CMD="Query State"
-        send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+        FTE_CMD = "Query State"
+        send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
         log_entry = f"wps_analyze_capture: sending: {send_data}"
         s.send(send_data)
 
-        ok, result_parse, result_str = _recv_and_parse(
+        ok, result_parse, _result_str = _recv_and_parse(
             handle,
             EXPECTED_COMMAND_QS,
             EXPECTED_STATUS_QS,
@@ -631,10 +662,14 @@ def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_r
             decode_errors="replace",
             context="wps_analyze_capture:query_state",
         )
-        if ok and len(result_parse) > 3 and (result_parse[3]==EXPECTED_REASON_QS1 or result_parse[3]==EXPECTED_REASON_QS2):
-            is_done_waiting=True
+        if ok and len(result_parse) > 3 and (
+            result_parse[3] == EXPECTED_REASON_QS1 or result_parse[3] == EXPECTED_REASON_QS2
+        ):
+            is_done_waiting = True
         else:
-            log_entry = f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
+            log_entry = (
+                f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
+            )
             handle['log'].append(log_entry)
             time.sleep(handle['sleep_time'])
 
@@ -646,18 +681,22 @@ def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_r
     EXPECTED_REASON_PC = "Reason=TRUE\r\n"
     while not is_done_waiting:
         if time.monotonic() - start_time > handle['max_wait_time']:
-            error_msg = f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_PC} {EXPECTED_STATUS_PC}' with reason '{EXPECTED_REASON_PC}' after {handle['max_wait_time']} seconds."
+            error_msg = (
+                f"wps_analyze_capture: Timeout waiting for '{EXPECTED_COMMAND_PC} {EXPECTED_STATUS_PC}' "
+                f"with reason '{EXPECTED_REASON_PC}' after {handle['max_wait_time']} seconds."
+            )
             handle['log'].append(error_msg)
-            if show_log: print(error_msg)
+            if show_log:
+                print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        FTE_CMD="Is Processing Complete"
-        send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+        FTE_CMD = "Is Processing Complete"
+        send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
         log_entry = f"wps_analyze_capture: sending: {send_data}"
         handle['log'].append(log_entry)
         s.send(send_data)
 
-        ok, result_parse, result_str = _recv_and_parse(
+        ok, result_parse, _result_str = _recv_and_parse(
             handle,
             EXPECTED_COMMAND_PC,
             EXPECTED_STATUS_PC,
@@ -669,11 +708,37 @@ def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_r
             context="wps_analyze_capture:is_processing_complete",
         )
         if ok:
-            is_done_waiting=True
+            is_done_waiting = True
         else:
-            log_entry = f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
+            log_entry = (
+                f"wps_analyze_capture: Parse of received: {result_parse}. Not the desired result so still waiting."
+            )
             handle['log'].append(log_entry)
             time.sleep(handle['sleep_time'])
+
+def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep=None):
+    """
+    Analyze the capture on the WPS (start, poll until complete, stop).
+
+    :param dict handle: Connection handle returned by wps_open().
+    :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
+    :returns: None
+    :raises WPSTimeoutError: If any polling stage times out.
+    """
+    wps_analyze_capture_start(
+        handle,
+        show_log=show_log,
+        recv_retry_attempts=recv_retry_attempts,
+        recv_retry_sleep=recv_retry_sleep,
+    )
+    wps_analyze_capture_stop(
+        handle,
+        show_log=show_log,
+        recv_retry_attempts=recv_retry_attempts,
+        recv_retry_sleep=recv_retry_sleep,
+    )
 
 def wps_open_capture(handle, capture_absolute_filename, show_log=False):
     """
