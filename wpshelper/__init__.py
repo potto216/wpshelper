@@ -375,7 +375,14 @@ def wps_open(
             time.sleep(handle['sleep_time'])  # Use configurable sleep time
     return handle
 
-def wps_configure(handle, personality_key, capture_technology, show_log=False):
+def wps_configure(
+    handle,
+    personality_key,
+    capture_technology,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Configure the capture settings in WPS before recording.
 
@@ -383,6 +390,8 @@ def wps_configure(handle, personality_key, capture_technology, show_log=False):
     :param str personality_key: Personality key for the hardware.
     :param str capture_technology: Capture technology string, e.g. "LE" or "BR/EDR".
     :param bool show_log: If True, print log messages.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     :raises WPSTimeoutError: If configuration does not succeed before timeout.
     """    
@@ -417,7 +426,14 @@ def wps_configure(handle, personality_key, capture_technology, show_log=False):
             if show_log: print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        ok, result_parse, result_str = _recv_and_parse(handle, EXPECTED_COMMAND, EXPECTED_STATUS, show_log=show_log)
+        ok, result_parse, result_str = _recv_and_parse(
+            handle,
+            EXPECTED_COMMAND,
+            EXPECTED_STATUS,
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+        )
         if ok:
             is_done_waiting=True
         else:
@@ -427,12 +443,14 @@ def wps_configure(handle, personality_key, capture_technology, show_log=False):
                 print(log_entry)
             time.sleep(handle['sleep_time'])
 
-def wps_start_record(handle, show_log=False):
+def wps_start_record(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep=None):
     """
     Start recording on the WPS.
 
     :param dict handle: Connection handle returned by wps_open().
     :param bool show_log: If True, print the send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -445,18 +463,27 @@ def wps_start_record(handle, show_log=False):
     if show_log:
         print(log_entry)
     s.send(send_data)
-    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_start_record")
+    data=_recv_with_retries(
+        handle,
+        MAX_TO_READ,
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        show_log=show_log,
+        context="wps_start_record",
+    )
     log_entry = f"wps_start_record: Receiving: {data}"
     handle['log'].append(log_entry)
     if show_log:
         print(log_entry)
 
-def wps_stop_record(handle, show_log=False):
+def wps_stop_record(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep=None):
     """
     Stop recording on the WPS.
 
     :param dict handle: Connection handle returned by wps_open().
     :param bool show_log: If True, print the send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -490,6 +517,8 @@ def wps_stop_record(handle, show_log=False):
             expected_cmd=expected_cmd,
             expected_status=expected_status,
             show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
         )
 
         # Timeout in _recv_and_parse yields (False, None, None): keep waiting.
@@ -737,13 +766,21 @@ def wps_analyze_capture(handle, show_log=False, recv_retry_attempts=None, recv_r
         recv_retry_sleep=recv_retry_sleep,
     )
 
-def wps_open_capture(handle, capture_absolute_filename, show_log=False):
+def wps_open_capture(
+    handle,
+    capture_absolute_filename,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Open an existing capture file in WPS.
 
     :param dict handle: Connection handle returned by wps_open().
     :param str capture_absolute_filename: Path to the capture file.
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     :raises WPSTimeoutError: If final confirmation does not arrive in time.
     """    
@@ -777,7 +814,12 @@ def wps_open_capture(handle, capture_absolute_filename, show_log=False):
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        _, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+        _, result_parse, result_str = _recv_and_parse(
+            handle,
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+        )
 
         # Socket timeout: keep waiting until max_wait_time.
         if result_parse is None:
@@ -806,13 +848,21 @@ def wps_open_capture(handle, capture_absolute_filename, show_log=False):
         return
 
 
-def wps_save_capture(handle, capture_absolute_filename, show_log=False):
+def wps_save_capture(
+    handle,
+    capture_absolute_filename,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Save the current capture to disk.
 
     :param dict handle: Connection handle returned by wps_open().
     :param str capture_absolute_filename: Path where to save the capture.
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -833,6 +883,8 @@ def wps_save_capture(handle, capture_absolute_filename, show_log=False):
         expected_status="SUCCEEDED",
         show_log=show_log,
         context="wps_save_capture",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
     )
     log_entry = f"wps_save_capture: {result_str}"
     handle['log'].append(log_entry)
@@ -840,7 +892,13 @@ def wps_save_capture(handle, capture_absolute_filename, show_log=False):
         print(log_entry)
 
 
-def wps_close_capture(handle, capture_absolute_filename=None, show_log=False):
+def wps_close_capture(
+    handle,
+    capture_absolute_filename=None,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Close the current capture file.
 
@@ -853,6 +911,13 @@ def wps_close_capture(handle, capture_absolute_filename=None, show_log=False):
     Response format:
     "CLOSE CAPTURE FILE ;<status>;<timestamp>;[<reason>]"
     (A reason is supplied only for FAILED status.)
+
+    :param dict handle: Connection handle returned by wps_open().
+    :param str|None capture_absolute_filename: Optional file path to close/save.
+    :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
+    :returns: None
     """
     s = handle['socket']
     MAX_TO_READ = handle['max_data_from_automation_server']
@@ -873,6 +938,8 @@ def wps_close_capture(handle, capture_absolute_filename=None, show_log=False):
         expected_status="SUCCEEDED",
         show_log=show_log,
         context="wps_close_capture",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
     )
     log_entry = f"wps_close_capture: {result_str}"
     handle['log'].append(log_entry)
@@ -1143,13 +1210,21 @@ def wps_export_spectrum(
     if show_log:
         print(log_entry)
 
-def wps_get_available_streams_audio(handle,parameters="No", show_log=False):
+def wps_get_available_streams_audio(
+    handle,
+    parameters="No",
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Query available audio streams in the capture.
 
     :param dict handle: Connection handle returned by wps_open().
     :param str parameters: Parameters string for the plugin (default "No").
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: Raw response bytes from WPS.
     :rtype: bytes
     """    
@@ -1165,7 +1240,14 @@ def wps_get_available_streams_audio(handle,parameters="No", show_log=False):
         print(log_entry)
 
     s.send(send_data)
-    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_get_available_streams_audio")
+    data=_recv_with_retries(
+        handle,
+        MAX_TO_READ,
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        show_log=show_log,
+        context="wps_get_available_streams_audio",
+    )
     log_entry = f"wps_get_available_streams_audio: {data}"
     handle['log'].append(log_entry)
     if show_log:
@@ -1229,7 +1311,14 @@ def wps_export_audio(
 # Example values
 # bookmark_text = 'le collect'
 # bookmark_frame = 1
-def wps_add_bookmark(handle, bookmark_frame, bookmark_text, show_log=False):
+def wps_add_bookmark(
+    handle,
+    bookmark_frame,
+    bookmark_text,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Add a bookmark to the capture.
 
@@ -1237,6 +1326,8 @@ def wps_add_bookmark(handle, bookmark_frame, bookmark_text, show_log=False):
     :param int bookmark_frame: Frame index for the bookmark.
     :param str bookmark_text: Text for the bookmark.
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -1257,6 +1348,8 @@ def wps_add_bookmark(handle, bookmark_frame, bookmark_text, show_log=False):
         expected_status="SUCCEEDED",
         show_log=show_log,
         context="wps_add_bookmark",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
     )
     log_entry = f"wps_add_bookmark: {result_str}"
     handle['log'].append(log_entry)
@@ -1264,7 +1357,13 @@ def wps_add_bookmark(handle, bookmark_frame, bookmark_text, show_log=False):
         print(log_entry)
 
 # Set Resolving List
-def wps_set_resolving_list(handle, address_list=None, show_log=False):
+def wps_set_resolving_list(
+    handle,
+    address_list=None,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Set the resolving list for BR/EDR device address resolution.
 
@@ -1279,6 +1378,8 @@ def wps_set_resolving_list(handle, address_list=None, show_log=False):
     :param list|tuple|str|None address_list: BD_ADDR list or comma-separated string. Use None/""/[]
         to clear the list.
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: Reason string from the analyzer response.
     :raises ValueError: On invalid handle or address list values.
     :raises WPSTimeoutError: If the command does not complete before handle['max_wait_time'].
@@ -1329,7 +1430,12 @@ def wps_set_resolving_list(handle, address_list=None, show_log=False):
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        _, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+        _, result_parse, result_str = _recv_and_parse(
+            handle,
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+        )
 
         if result_parse is None:
             continue
@@ -1353,7 +1459,14 @@ def wps_set_resolving_list(handle, address_list=None, show_log=False):
 
         time.sleep(handle.get('sleep_time', 1))
 
-def wps_wireless_devices(handle, action, action_parameters=None, show_log=False):
+def wps_wireless_devices(
+    handle,
+    action,
+    action_parameters=None,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Send a Wireless Devices command and return the response reason.
 
@@ -1375,6 +1488,8 @@ def wps_wireless_devices(handle, action, action_parameters=None, show_log=False)
         When a dict is provided, parameters are formatted as key=value pairs joined by ";".
         When a list/tuple is provided, entries may be "key=value" strings or (key, value) pairs.
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: Reason string from the analyzer response, or "" if not supplied.
     :raises ValueError: On invalid handle, action, or parameters.
     :raises WPSTimeoutError: If the command does not complete before handle['max_wait_time'].
@@ -1461,7 +1576,12 @@ def wps_wireless_devices(handle, action, action_parameters=None, show_log=False)
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
 
-        _, result_parse, result_str = _recv_and_parse(handle, show_log=show_log)
+        _, result_parse, result_str = _recv_and_parse(
+            handle,
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+        )
 
         if result_parse is None:
             continue
@@ -1486,13 +1606,21 @@ def wps_wireless_devices(handle, action, action_parameters=None, show_log=False)
         time.sleep(handle.get('sleep_time', 1))
 
 # This is used to send a general command to the WPS
-def wps_send_command(handle, full_command, show_log=False):
+def wps_send_command(
+    handle,
+    full_command,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
     """
     Send a raw FTE command to WPS.
 
     :param dict handle: Connection handle returned by wps_open().
     :param str full_command: The complete FTE command string.
     :param bool show_log: If True, print send/receive log.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
     :returns: None
     """    
     s = handle['socket']
@@ -1506,7 +1634,14 @@ def wps_send_command(handle, full_command, show_log=False):
         print(log_entry)
 
     s.send(send_data)
-    data=_recv_with_retries(handle, MAX_TO_READ, show_log=show_log, context="wps_send_command")
+    data=_recv_with_retries(
+        handle,
+        MAX_TO_READ,
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        show_log=show_log,
+        context="wps_send_command",
+    )
     log_entry = f"wps_send_command: Receiving: {data}"
     handle['log'].append(log_entry)
     if show_log:

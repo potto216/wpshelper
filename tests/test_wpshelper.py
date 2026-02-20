@@ -1,6 +1,8 @@
+import inspect
 import socket
 
 import pytest
+import wpshelper
 
 from tests.mock_tcp import MockAutomationSimulator
 from wpshelper import (
@@ -291,3 +293,104 @@ def test_wps_analyze_capture_stop_runs_full_stop_sequence():
             "Is Processing Complete",
             "Is Processing Complete",
         ]
+
+
+@pytest.mark.parametrize(
+    "func_name",
+    [
+        "wps_open_capture",
+        "wps_close_capture",
+        "wps_configure",
+        "wps_start_record",
+        "wps_stop_record",
+        "wps_save_capture",
+        "wps_get_available_streams_audio",
+        "wps_add_bookmark",
+        "wps_set_resolving_list",
+        "wps_wireless_devices",
+        "wps_send_command",
+    ],
+)
+def test_functions_expose_recv_retry_overrides(func_name):
+    signature = inspect.signature(getattr(wpshelper, func_name))
+    assert "recv_retry_attempts" in signature.parameters
+    assert "recv_retry_sleep" in signature.parameters
+
+
+def test_wps_send_command_forwards_recv_retry_overrides(monkeypatch):
+    captured = {}
+
+    class DummySocket:
+        def send(self, data):
+            captured["sent"] = data
+
+    def fake_recv(handle, max_to_read=None, retry_attempts=None, retry_sleep=None, show_log=False, context=""):
+        captured["retry_attempts"] = retry_attempts
+        captured["retry_sleep"] = retry_sleep
+        captured["context"] = context
+        return b"OK"
+
+    monkeypatch.setattr(wpshelper, "_recv_with_retries", fake_recv)
+
+    handle = {
+        "socket": DummySocket(),
+        "max_data_from_automation_server": 1000,
+        "log": [],
+    }
+
+    wpshelper.wps_send_command(
+        handle,
+        "Custom Command",
+        recv_retry_attempts=4,
+        recv_retry_sleep=0.25,
+    )
+
+    assert captured["sent"] == b"Custom Command"
+    assert captured["retry_attempts"] == 4
+    assert captured["retry_sleep"] == 0.25
+    assert captured["context"] == "wps_send_command"
+
+
+def test_wps_open_capture_forwards_recv_retry_overrides(monkeypatch):
+    captured = {}
+
+    class DummySocket:
+        def send(self, data):
+            captured["sent"] = data
+
+    def fake_recv_and_parse(
+        handle,
+        expected_cmd=None,
+        expected_status=None,
+        expected_reason=None,
+        show_log=False,
+        *,
+        retry_attempts=None,
+        retry_sleep=None,
+        decode_errors="strict",
+        context="",
+    ):
+        captured["retry_attempts"] = retry_attempts
+        captured["retry_sleep"] = retry_sleep
+        return True, ["OPEN CAPTURE FILE", "SUCCEEDED", "0", "Reason=done"], "OPEN CAPTURE FILE;SUCCEEDED;0;Reason=done"
+
+    monkeypatch.setattr(wpshelper, "_recv_and_parse", fake_recv_and_parse)
+
+    handle = {
+        "socket": DummySocket(),
+        "max_data_from_automation_server": 1000,
+        "sleep_time": 0,
+        "max_wait_time": 1,
+        "log": [],
+    }
+
+    wpshelper.wps_open_capture(
+        handle,
+        "C:/temp/file.cfa",
+        recv_retry_attempts=2,
+        recv_retry_sleep=0.1,
+    )
+
+    assert captured["sent"] == b"Open Capture File;C:/temp/file.cfa;notify=1"
+    assert captured["retry_attempts"] == 2
+    assert captured["retry_sleep"] == 0.1
