@@ -1,6 +1,7 @@
 import os
 import re
 import socket
+import sys
 import time
 
 class WPSTimeoutError(TimeoutError):
@@ -8,6 +9,53 @@ class WPSTimeoutError(TimeoutError):
     def __init__(self, message, handle=None):
         super().__init__(message)
         self.handle = handle
+
+
+def wps_write_log(handle, destination="stdout", filename_prefix="wps_log"):
+    """Write ``handle['log']`` to stdout/stderr or save it to a file.
+
+    :param dict handle: Handle that includes a ``log`` list.
+    :param str destination: ``"stdout"``, ``"stderr"``, or a filesystem path.
+                            If a directory path is provided, a timestamped
+                            default filename is created in that directory.
+    :param str filename_prefix: Prefix used for auto-generated filenames when
+                                ``destination`` is a directory path.
+    :returns: Saved file path when writing to disk, otherwise ``None``.
+    :rtype: str | None
+    :raises ValueError: On missing/invalid handle or destination.
+    """
+    if not isinstance(handle, dict) or "log" not in handle:
+        raise ValueError("Invalid handle: expected dict containing 'log'.")
+
+    log_entries = handle["log"]
+    if not isinstance(log_entries, list):
+        raise ValueError("Invalid handle['log']: expected a list of log entries.")
+
+    log_text = "\n".join(str(entry) for entry in log_entries)
+    if log_text:
+        log_text += "\n"
+
+    target = "stdout" if destination is None else str(destination)
+    lowered = target.lower()
+    if lowered == "stdout":
+        sys.stdout.write(log_text)
+        return None
+    if lowered == "stderr":
+        sys.stderr.write(log_text)
+        return None
+
+    if os.path.isdir(target):
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        target = os.path.join(target, f"{filename_prefix}_{timestamp}.log")
+
+    parent_dir = os.path.dirname(target)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(log_text)
+
+    return target
 
 
 def wps_find_installations(

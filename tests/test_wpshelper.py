@@ -17,6 +17,7 @@ from wpshelper import (
     wps_set_resolving_list,
     wps_update_matter_keys,
     wps_wireless_devices,
+    wps_write_log,
 )
 
 
@@ -394,3 +395,43 @@ def test_wps_open_capture_forwards_recv_retry_overrides(monkeypatch):
     assert captured["sent"] == b"Open Capture File;C:/temp/file.cfa;notify=1"
     assert captured["retry_attempts"] == 2
     assert captured["retry_sleep"] == 0.1
+
+
+def test_wps_write_log_to_stdout(capsys):
+    handle = {"log": ["line1", "line2"]}
+
+    result = wps_write_log(handle, "stdout")
+
+    captured = capsys.readouterr()
+    assert result is None
+    assert captured.out == "line1\nline2\n"
+
+
+def test_wps_write_log_to_stderr(capsys):
+    handle = {"log": ["line1"]}
+
+    result = wps_write_log(handle, "stderr")
+
+    captured = capsys.readouterr()
+    assert result is None
+    assert captured.err == "line1\n"
+
+
+def test_wps_write_log_to_directory_creates_timestamped_file(tmp_path, monkeypatch):
+    handle = {"log": ["entry"]}
+    monkeypatch.setattr(wpshelper.time, "strftime", lambda _fmt: "20260220_010203")
+
+    saved_path = wps_write_log(handle, str(tmp_path))
+
+    assert saved_path == str(tmp_path / "wps_log_20260220_010203.log")
+    assert (tmp_path / "wps_log_20260220_010203.log").read_text(encoding="utf-8") == "entry\n"
+
+
+def test_wps_write_log_to_file_path(tmp_path):
+    handle = {"log": ["alpha", "beta"]}
+    out_file = tmp_path / "logs" / "run.log"
+
+    saved_path = wps_write_log(handle, str(out_file))
+
+    assert saved_path == str(out_file)
+    assert out_file.read_text(encoding="utf-8") == "alpha\nbeta\n"
