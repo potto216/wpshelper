@@ -117,17 +117,14 @@ def _recv_and_parse(
     max_to_read = handle["max_data_from_automation_server"]
 
     try:
-        if retry_attempts is None and retry_sleep is None:
-            rcv_data = s.recv(max_to_read)
-        else:
-            rcv_data = _recv_with_retries(
-                handle,
-                max_to_read,
-                retry_attempts=retry_attempts,
-                retry_sleep=retry_sleep,
-                show_log=show_log,
-                context=context or "_recv_and_parse",
-            )
+        rcv_data = _recv_with_retries(
+            handle,
+            max_to_read,
+            retry_attempts=retry_attempts,
+            retry_sleep=retry_sleep,
+            show_log=show_log,
+            context=context or "_recv_and_parse",
+        )
     except (socket.timeout, TimeoutError) as e:
         log_entry = f"_recv_and_parse: Socket receive timed out: {e}"
         handle["log"].append(log_entry)
