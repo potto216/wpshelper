@@ -30,3 +30,26 @@ pytest -k recv_and_parse -q
 
 # Notes
 Following [PEP-0008](https://peps.python.org/pep-0008/#package-and-module-names) naming for the package name using just undercase
+
+# Receive retry overrides
+The following helper functions support per-call socket receive retry overrides:
+
+- `recv_retry_attempts=None`
+- `recv_retry_sleep=None`
+
+Supported functions:
+
+- `wps_open_capture`
+- `wps_close_capture`
+- `wps_configure`
+- `wps_start_record`
+- `wps_stop_record`
+- `wps_save_capture`
+- `wps_get_available_streams_audio`
+- `wps_add_bookmark`
+- `wps_set_resolving_list`
+- `wps_wireless_devices`
+- `wps_send_command`
+
+When omitted, each function falls back to the defaults configured on the `handle`
+(`recv_retry_attempts`, `recv_retry_sleep`, and existing `sleep_time` fallback behavior).
