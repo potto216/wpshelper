@@ -142,6 +142,9 @@ def wps_find_installations(
         "log": log,
     }
 
+def _normalize_cmd_token(value) -> str:
+    """Normalize command tokens for robust comparisons (case/whitespace-insensitive)."""
+    return str(value).strip().casefold()
 
 def _recv_and_parse(
     handle,
@@ -189,7 +192,10 @@ def _recv_and_parse(
         print(log_entry)
 
     ok = True
-    if expected_cmd is not None and (len(result_parse) == 0 or result_parse[0] != expected_cmd):
+    if expected_cmd is not None and (
+        len(result_parse) == 0
+        or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd)
+    ):
         ok = False
     if expected_status is not None and (len(result_parse) < 2 or result_parse[1] != expected_status):
         ok = False
@@ -275,7 +281,7 @@ def _wait_for_command_result(
             continue
 
         # Unexpected/async message: ignore and keep waiting.
-        if len(result_parse) == 0 or result_parse[0] != expected_cmd:
+        if len(result_parse) == 0 or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd):
             log_entry = f"{context or expected_cmd}: ignoring unexpected response: {result_str}"
             handle['log'].append(log_entry)
             if show_log:
@@ -574,7 +580,7 @@ def wps_stop_record(handle, show_log=False, recv_retry_attempts=None, recv_retry
             continue
 
         # If it's the STOP RECORD response, either succeed or fail fast.
-        if len(result_parse) >= 2 and result_parse[0] == expected_cmd:
+        if len(result_parse) >= 2 and _normalize_cmd_token(result_parse[0]) == _normalize_cmd_token(expected_cmd):
             if ok:
                 log_entry = f"wps_stop_record: receiving: {result_str}"
                 handle['log'].append(log_entry)
@@ -874,7 +880,7 @@ def wps_open_capture(
             continue
 
         # Unexpected/async message: ignore and keep waiting.
-        if len(result_parse) == 0 or result_parse[0] != expected_cmd:
+        if len(result_parse) == 0 or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd):
             log_entry = f"wps_open_capture: ignoring unexpected response: {result_str}"
             handle['log'].append(log_entry)
             if show_log:
@@ -1488,7 +1494,7 @@ def wps_set_resolving_list(
         if result_parse is None:
             continue
 
-        if len(result_parse) == 0 or result_parse[0] != expected_cmd:
+        if len(result_parse) == 0 or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd):
             log_entry = f"wps_set_resolving_list: ignoring unexpected response: {result_str}"
             handle['log'].append(log_entry)
             if show_log:
@@ -1634,7 +1640,7 @@ def wps_wireless_devices(
         if result_parse is None:
             continue
 
-        if len(result_parse) == 0 or result_parse[0] != expected_cmd:
+        if len(result_parse) == 0 or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd):
             log_entry = f"wps_wireless_devices: ignoring unexpected response: {result_str}"
             handle['log'].append(log_entry)
             if show_log:
@@ -1755,7 +1761,7 @@ def wps_close(handle, show_log=False, recv_retry_attempts=None, recv_retry_sleep
             break
 
         result_parse = result_str.split(';')
-        if len(result_parse) >= 2 and result_parse[0] == expected_cmd:
+        if len(result_parse) >= 2 and _normalize_cmd_token(result_parse[0]) == _normalize_cmd_token(expected_cmd):
             break
 
     try:
