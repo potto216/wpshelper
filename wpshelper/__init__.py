@@ -11,18 +11,23 @@ class WPSTimeoutError(TimeoutError):
         self.handle = handle
 
 
-def wps_write_log(handle, destination="stdout", filename_prefix="wps_log"):
-    """Write ``handle['log']`` to stdout/stderr or save it to a file.
+def wps_log_text(handle) -> str:
+    """Return the WPS automation log as a single text string.
+
+    This is a small helper for turning ``handle['log']`` (a list of log entries)
+    into a newline-joined string suitable for printing or saving to disk.
+
+    The returned string ends with a trailing newline if there is at least one
+    log entry. If there are no entries, an empty string is returned.
 
     :param dict handle: Handle that includes a ``log`` list.
-    :param str destination: ``"stdout"``, ``"stderr"``, or a filesystem path.
-                            If a directory path is provided, a timestamped
-                            default filename is created in that directory.
-    :param str filename_prefix: Prefix used for auto-generated filenames when
-                                ``destination`` is a directory path.
-    :returns: Saved file path when writing to disk, otherwise ``None``.
-    :rtype: str | None
-    :raises ValueError: On missing/invalid handle or destination.
+    :returns: Log text (possibly empty).
+    :rtype: str
+    :raises ValueError: If ``handle`` is missing/invalid, or ``handle['log']`` is not a list.
+
+    Example:
+        >>> txt = wps_log_text(handle)
+        >>> print(txt)
     """
     if not isinstance(handle, dict) or "log" not in handle:
         raise ValueError("Invalid handle: expected dict containing 'log'.")
@@ -34,6 +39,25 @@ def wps_write_log(handle, destination="stdout", filename_prefix="wps_log"):
     log_text = "\n".join(str(entry) for entry in log_entries)
     if log_text:
         log_text += "\n"
+    return log_text
+
+
+def wps_write_log(handle, destination="stdout", filename_prefix="wps_log"):
+    """Write ``handle['log']`` to stdout/stderr or save it to a file.
+
+    Uses :func:`wps_log_text` to format the log entries.
+
+    :param dict handle: Handle that includes a ``log`` list.
+    :param str destination: ``"stdout"``, ``"stderr"``, or a filesystem path.
+                            If a directory path is provided, a timestamped
+                            default filename is created in that directory.
+    :param str filename_prefix: Prefix used for auto-generated filenames when
+                                ``destination`` is a directory path.
+    :returns: Saved file path when writing to disk, otherwise ``None``.
+    :rtype: str | None
+    :raises ValueError: On missing/invalid handle or destination.
+    """
+    log_text = wps_log_text(handle)
 
     target = "stdout" if destination is None else str(destination)
     lowered = target.lower()
@@ -365,6 +389,13 @@ def wps_open(
         if show_log:
             print(log_entry)
         raise  # Re-raise the socket error
+
+    # if str(personality_key).strip().casefold() == "view":
+    #     log_entry = "wps_open: VIEW personality does not require a personality key in the command arguments, but the function requires a non-empty personality_key parameter. The provided personality_key value will be ignored."
+    #     handle['log'].append(log_entry)
+    #     if show_log:
+    #         print(log_entry)
+    #     return handle
 
     # Start Wireless Protocol Suite
     FTE_CMD="Start FTS"+";" + str(wps_executable_path) + ";" + personality_key
@@ -1187,7 +1218,7 @@ def wps_export_pcapng(
 
     :param dict handle: Connection handle returned by wps_open().
     :param str pcapng_absolute_filename: Output PCAPNG file path.
-    :param str tech: Technology filter [Classic, LE, 80211, WPAN] (default 'LE').
+    :param str tech: Technology filter [Classic,LE,80211,WPAN] (default 'LE'). Names should be listed without spaces, e.g. 'LE,80211' not 'LE, 80211'.
     :param int mode: Mode parameter (default 0).
     :param bool show_log: If True, print send/receive log.
     :param int recv_retry_attempts: Override handle recv retry attempts for this call.
