@@ -266,19 +266,24 @@ def _wait_for_command_result(
     retry_attempts=None,
     retry_sleep=None,
     decode_errors="strict",
+    raise_on_failed: bool = True,
 ):
     """Wait up to handle['max_wait_time'] for a specific command result.
 
     This is used for commands that can legitimately take longer than the socket
     timeout (e.g., Save Capture, exports). It polls recv until it sees a message
-    whose command matches expected_cmd. If that message's status is FAILED, it
-    raises RuntimeError. If it never arrives before max_wait_time, it raises
-    WPSTimeoutError.
+    whose command matches expected_cmd.
+
+    If that message's status is FAILED:
+      - raises RuntimeError when raise_on_failed=True (default)
+      - returns (result_parse, result_str) when raise_on_failed=False
+
+    If it never arrives before max_wait_time, it raises WPSTimeoutError.
 
     :returns: (result_parse, result_str)
     """
     start_time = time.monotonic()
-    max_wait = handle.get('max_wait_time', 60)
+    max_wait = handle.get("max_wait_time", 60)
 
     while True:
         if time.monotonic() - start_time > max_wait:
@@ -286,7 +291,7 @@ def _wait_for_command_result(
                 f"{context or expected_cmd}: Timeout waiting for '{expected_cmd} {expected_status}' "
                 f"after {max_wait} seconds."
             )
-            handle['log'].append(error_msg)
+            handle["log"].append(error_msg)
             if show_log:
                 print(error_msg)
             raise WPSTimeoutError(error_msg, handle=handle)
@@ -307,19 +312,23 @@ def _wait_for_command_result(
         # Unexpected/async message: ignore and keep waiting.
         if len(result_parse) == 0 or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd):
             log_entry = f"{context or expected_cmd}: ignoring unexpected response: {result_str}"
-            handle['log'].append(log_entry)
+            handle["log"].append(log_entry)
             if show_log:
                 print(log_entry)
             continue
 
         status = result_parse[1] if len(result_parse) > 1 else None
+
         if status == expected_status:
             return result_parse, result_str
+
         if status == "FAILED":
-            raise RuntimeError(f"{context or expected_cmd}: {result_str}")
+            if raise_on_failed:
+                raise RuntimeError(f"{context or expected_cmd}: {result_str}")
+            return result_parse, result_str
 
         # Any other status: keep waiting.
-        time.sleep(handle.get('sleep_time', 1))
+        time.sleep(handle.get("sleep_time", 1))
 
 def wps_open(
     tcp_ip="127.0.0.1",
@@ -1500,49 +1509,29 @@ def wps_set_resolving_list(
 
     handle['socket'].send(send_data)
 
-    start_time = time.monotonic()
-    expected_cmd = "SET RESOLVING LIST"
-    max_wait = handle.get('max_wait_time', 60)
+    result_parse, result_str = _wait_for_command_result(
+        handle,
+        expected_cmd="SET RESOLVING LIST",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_set_resolving_list",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        decode_errors="replace",
+        raise_on_failed=False,  # caller wants the reason even on FAILED
+    )
 
-    while True:
-        if time.monotonic() - start_time > max_wait:
-            error_msg = (
-                f"wps_set_resolving_list: Timeout waiting for '{expected_cmd}' "
-                f"after {max_wait} seconds."
-            )
-            handle['log'].append(error_msg)
-            if show_log:
-                print(error_msg)
-            raise WPSTimeoutError(error_msg, handle=handle)
+    status = result_parse[1] if len(result_parse) > 1 else None
+    reason = result_parse[3] if len(result_parse) > 3 else ""
+    log_entry = f"wps_set_resolving_list: {result_str}"
+    handle["log"].append(log_entry)
+    if show_log:
+        print(log_entry)
 
-        _, result_parse, result_str = _recv_and_parse(
-            handle,
-            show_log=show_log,
-            retry_attempts=recv_retry_attempts,
-            retry_sleep=recv_retry_sleep,
-        )
-
-        if result_parse is None:
-            continue
-
-        if len(result_parse) == 0 or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd):
-            log_entry = f"wps_set_resolving_list: ignoring unexpected response: {result_str}"
-            handle['log'].append(log_entry)
-            if show_log:
-                print(log_entry)
-            continue
-
-        status = result_parse[1] if len(result_parse) > 1 else None
-        reason = result_parse[3] if len(result_parse) > 3 else ""
-        log_entry = f"wps_set_resolving_list: {result_str}"
-        handle['log'].append(log_entry)
-        if show_log:
-            print(log_entry)
-
-        if status in ("SUCCEEDED", "FAILED"):
-            return reason
-
-        time.sleep(handle.get('sleep_time', 1))
+    # Preserve existing behavior: return reason for both SUCCEEDED and FAILED.
+    if status in ("SUCCEEDED", "FAILED"):
+        return reason
+    return reason
 
 def wps_wireless_devices(
     handle,
@@ -1606,6 +1595,7 @@ def wps_wireless_devices(
         raise ValueError("action_parameters must be a dict, list/tuple, string, or None.")
 
     param_text = _format_params(action_parameters)
+
     if action.strip().lower() == "select" and action_parameters is not None:
         address_pattern = re.compile(r"^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$")
         if isinstance(action_parameters, dict):
@@ -1634,63 +1624,42 @@ def wps_wireless_devices(
             raise ValueError("select action select value must be 'yes' or 'no'.")
         if favorite_value is not None and favorite_value not in {"yes", "no"}:
             raise ValueError("select action favorite value must be 'yes' or 'no'.")
+
     FTE_CMD = f"Wireless Devices;{action.strip()}"
     if param_text:
         FTE_CMD = f"{FTE_CMD};{param_text}"
 
-    send_data = FTE_CMD.encode(encoding='UTF-8', errors='strict')
+    send_data = FTE_CMD.encode(encoding="UTF-8", errors="strict")
     log_entry = f"wps_wireless_devices: sending: {send_data}"
-    handle['log'].append(log_entry)
+    handle["log"].append(log_entry)
     if show_log:
         print(log_entry)
 
-    handle['socket'].send(send_data)
+    handle["socket"].send(send_data)
 
-    start_time = time.monotonic()
-    expected_cmd = "WIRELESS DEVICES"
-    max_wait = handle.get('max_wait_time', 60)
+    result_parse, result_str = _wait_for_command_result(
+        handle,
+        expected_cmd="WIRELESS DEVICES",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_wireless_devices",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+        decode_errors="replace",
+        raise_on_failed=False,  # preserve: return reason even on FAILED
+    )
 
-    while True:
-        if time.monotonic() - start_time > max_wait:
-            error_msg = (
-                f"wps_wireless_devices: Timeout waiting for '{expected_cmd}' "
-                f"after {max_wait} seconds."
-            )
-            handle['log'].append(error_msg)
-            if show_log:
-                print(error_msg)
-            raise WPSTimeoutError(error_msg, handle=handle)
+    status = result_parse[1] if len(result_parse) > 1 else None
+    reason = result_parse[3] if len(result_parse) > 3 else ""
+    log_entry = f"wps_wireless_devices: {result_str}"
+    handle["log"].append(log_entry)
+    if show_log:
+        print(log_entry)
 
-        _, result_parse, result_str = _recv_and_parse(
-            handle,
-            show_log=show_log,
-            retry_attempts=recv_retry_attempts,
-            retry_sleep=recv_retry_sleep,
-        )
+    if status in ("SUCCEEDED", "FAILED"):
+        return reason
+    return reason
 
-        if result_parse is None:
-            continue
-
-        if len(result_parse) == 0 or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd):
-            log_entry = f"wps_wireless_devices: ignoring unexpected response: {result_str}"
-            handle['log'].append(log_entry)
-            if show_log:
-                print(log_entry)
-            continue
-
-        status = result_parse[1] if len(result_parse) > 1 else None
-        reason = result_parse[2] if len(result_parse) > 3 else ""
-        log_entry = f"wps_wireless_devices: {result_str}"
-        handle['log'].append(log_entry)
-        if show_log:
-            print(log_entry)
-
-        if status in ("SUCCEEDED", "FAILED"):
-            return reason
-
-        time.sleep(handle.get('sleep_time', 1))
-
-# This is used to send a general command to the WPS
 def wps_send_command(
     handle,
     full_command,
