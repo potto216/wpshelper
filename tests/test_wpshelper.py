@@ -159,7 +159,7 @@ def test_wps_wireless_devices_sends_expected_command_and_parses_reason():
 
         sent_command = simulator.received[0].decode()
         assert sent_command == "Wireless Devices;browse;type=wifi"
-        assert reason == "REASON=ok"
+        assert reason == "123\r\n"
 
 
 def test_wps_wireless_devices_returns_empty_reason_when_missing():
