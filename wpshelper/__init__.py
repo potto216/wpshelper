@@ -170,6 +170,19 @@ def _normalize_cmd_token(value) -> str:
     """Normalize command tokens for robust comparisons (case/whitespace-insensitive)."""
     return str(value).strip().casefold()
 
+
+def _normalize_response_field(value, *, casefold=False) -> str:
+    """Normalize response fields by preserving original parsed tokens for callers."""
+    normalized = str(value).strip()
+    return normalized.casefold() if casefold else normalized
+
+
+def _get_response_reason(result_parse) -> str:
+    """Return the reason field for both 3-field and 4-field WPS response contracts."""
+    if not result_parse or len(result_parse) < 3:
+        return ""
+    return result_parse[-1]
+
 def _recv_and_parse(
     handle,
     expected_cmd=None,
@@ -221,9 +234,17 @@ def _recv_and_parse(
         or _normalize_cmd_token(result_parse[0]) != _normalize_cmd_token(expected_cmd)
     ):
         ok = False
-    if expected_status is not None and (len(result_parse) < 2 or result_parse[1] != expected_status):
+    if expected_status is not None and (
+        len(result_parse) < 2 
+        or _normalize_response_field(result_parse[1], casefold=True)
+        != _normalize_response_field(expected_status, casefold=True)
+    ):
         ok = False
-    if expected_reason is not None and (len(result_parse) < 4 or result_parse[3] != expected_reason):
+    if expected_reason is not None and (
+        len(result_parse) < 3 
+        or _normalize_response_field(_get_response_reason(result_parse))
+        != _normalize_response_field(expected_reason)
+    ):
         ok = False
 
     return ok, result_parse, result_str
@@ -317,18 +338,82 @@ def _wait_for_command_result(
                 print(log_entry)
             continue
 
-        status = result_parse[1] if len(result_parse) > 1 else None
+        status = _normalize_response_field(result_parse[1], casefold=True) if len(result_parse) > 1 else None
 
-        if status == expected_status:
+        if status == _normalize_response_field(expected_status, casefold=True):
             return result_parse, result_str
 
-        if status == "FAILED":
+        if status == "failed":
             if raise_on_failed:
                 raise RuntimeError(f"{context or expected_cmd}: {result_str}")
             return result_parse, result_str
 
         # Any other status: keep waiting.
         time.sleep(handle.get("sleep_time", 1))
+
+def wps_init(
+    tcp_ip="127.0.0.1",
+    tcp_port=22901,
+    max_to_read=1000,
+    wps_executable_path=None,
+    sleep_time=1,
+    max_wait_time=60,
+    recv_retry_attempts=0,
+    recv_retry_sleep=None,
+    show_log=False,
+):
+    """
+    Open a connection to the WPS automation server and start the FTS.
+
+    :param str tcp_ip: IP address of the automation server.
+    :param int tcp_port: Port of the automation server.
+    :param int max_to_read: Maximum bytes to read from the socket at once.
+    :param str wps_executable_path: Full path to the FTSAutoServer executable.
+    :param int sleep_time: Seconds to sleep between polling attempts.
+    :param int max_wait_time: Max seconds to wait before timing out.
+    :param int recv_retry_attempts: Number of recv retries on timeout.
+    :param float recv_retry_sleep: Seconds to sleep between recv retries (defaults to sleep_time).
+    :param bool show_log: If True, print log messages.
+    :returns: A dict handle containing socket, settings, and log.
+    :rtype: dict
+    :raises WPSTimeoutError: On startup/initialization timeout.
+    :raises socket.error: On socket connection failure.
+    """
+    
+    if wps_executable_path is None or not str(wps_executable_path):
+        raise ValueError("wps_executable_path must be a non-empty string.")
+
+    handle={
+        'max_data_from_automation_server':max_to_read,
+        'tcp_ip':tcp_ip,
+        'tcp_port':tcp_port,
+        'sleep_time':sleep_time,
+        'max_wait_time': max_wait_time,
+        'recv_retry_attempts': recv_retry_attempts,
+        'recv_retry_sleep': sleep_time if recv_retry_sleep is None else recv_retry_sleep,
+    }
+    handle['log']=[]
+    MAX_TO_READ = handle['max_data_from_automation_server']
+    handle['wps_executable_path']=wps_executable_path
+
+    try:
+        s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        # Use a socket timeout so higher-level timeouts cannot be blocked
+        s.settimeout(handle['sleep_time'])
+        s.connect((handle['tcp_ip'],handle['tcp_port']))
+        handle['socket'] = s
+        data=_recv_with_retries(handle, show_log=show_log, context="wps_open: initial recv")
+        log_entry = f"wps_init: Trying connection. Receiving: {data}"
+        handle['log'].append(log_entry)
+        if show_log:
+            print(log_entry)
+    except socket.error as e:
+        log_entry = f"wps_init: Socket connection failed: {e}"
+        handle['log'].append(log_entry)
+        if show_log:
+            print(log_entry)
+        raise  # Re-raise the socket error
+    return handle
 
 def wps_open(
     tcp_ip="127.0.0.1",
@@ -782,8 +867,10 @@ def wps_analyze_capture_stop(handle, show_log=False, recv_retry_attempts=None, r
             decode_errors="replace",
             context="wps_analyze_capture:query_state",
         )
-        if ok and len(result_parse) > 3 and (
-            result_parse[3] == EXPECTED_REASON_QS1 or result_parse[3] == EXPECTED_REASON_QS2
+        reason_field = _normalize_response_field(_get_response_reason(result_parse))
+        if ok and (
+            reason_field == _normalize_response_field(EXPECTED_REASON_QS1) 
+            or reason_field == _normalize_response_field(EXPECTED_REASON_QS2)
         ):
             is_done_waiting = True
         else:
@@ -927,15 +1014,15 @@ def wps_open_capture(
                 print(log_entry)
             continue
 
-        status = result_parse[1] if len(result_parse) > 1 else None
-        if status == "FAILED":
+        status = _normalize_response_field(result_parse[1], casefold=True)  if len(result_parse) > 1 else None
+        if status == "failed":
             raise RuntimeError(f"wps_open_capture: {result_str}")
-        if status != "SUCCEEDED":
+        if status != "succeeded":
             time.sleep(handle.get('sleep_time', 1))
             continue
 
-        reason_field = result_parse[3] if len(result_parse) > 3 else ""
-        if isinstance(reason_field, str) and "reason=yes" in reason_field.lower():
+        reason_field = _normalize_response_field(_get_response_reason(result_parse))
+        if reason_field and "reason=yes" in reason_field.casefold():
             time.sleep(handle.get('sleep_time', 1) / 2)
             continue
 
@@ -1207,7 +1294,7 @@ def wps_export_html(
         if status == "SUCCEEDED":
             return
         if status == "FAILED":
-            reason = result_parse[3] if result_parse and len(result_parse) > 3 else result_str
+            reason = _get_response_reason(result_parse) if result_parse else result_str
             raise RuntimeError(f"HTML Export failed: {reason}")
 
         # Unknown/intermediate status; keep waiting.
@@ -1522,7 +1609,7 @@ def wps_set_resolving_list(
     )
 
     status = result_parse[1] if len(result_parse) > 1 else None
-    reason = result_parse[3] if len(result_parse) > 3 else ""
+    reason = _get_response_reason(result_parse)
     log_entry = f"wps_set_resolving_list: {result_str}"
     handle["log"].append(log_entry)
     if show_log:
@@ -1650,7 +1737,7 @@ def wps_wireless_devices(
     )
 
     status = result_parse[1] if len(result_parse) > 1 else None
-    reason = result_parse[3] if len(result_parse) > 3 else ""
+    reason = _get_response_reason(result_parse)
     log_entry = f"wps_wireless_devices: {result_str}"
     handle["log"].append(log_entry)
     if show_log:

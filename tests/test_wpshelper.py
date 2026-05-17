@@ -36,6 +36,37 @@ def test_recv_and_parse_matches_expectations():
         assert raw == "CMD;OK;extra;Reason=ready\r\n"
 
 
+def test_recv_and_parse_status_matches_tolerates_trailing_crlf():
+    with MockAutomationSimulator(connect_responses=[b"OPEN CAPTURE FILE;SUCCEEDED\r\n"]) as simulator:
+        handle = simulator.create_handle()
+        ok, parsed, raw = _recv_and_parse(
+            handle,
+            expected_cmd="OPEN CAPTURE FILE",
+            expected_status="SUCCEEDED",
+        )
+
+        assert ok is True
+        assert parsed == ["OPEN CAPTURE FILE", "SUCCEEDED\r\n"]
+        assert raw == "OPEN CAPTURE FILE;SUCCEEDED\r\n"
+
+
+def test_recv_and_parse_reason_match_accepts_three_field_contract():
+    with MockAutomationSimulator(
+        connect_responses=[b"IS ANALYZE COMPLETE;SUCCEEDED;Reason=analyze_complete=yes\r\n"]
+    ) as simulator:
+        handle = simulator.create_handle()
+        ok, parsed, raw = _recv_and_parse(
+            handle,
+            expected_cmd="IS ANALYZE COMPLETE",
+            expected_status="SUCCEEDED",
+            expected_reason="Reason=analyze_complete=yes\r\n",
+        )
+
+        assert ok is True
+        assert parsed == ["IS ANALYZE COMPLETE", "SUCCEEDED", "Reason=analyze_complete=yes\r\n"]
+        assert raw == "IS ANALYZE COMPLETE;SUCCEEDED;Reason=analyze_complete=yes\r\n"
+
+
 def test_recv_and_parse_mismatch_returns_false():
     with MockAutomationSimulator(connect_responses=[b"CMD;OK;extra;Reason=ready\r\n"]) as simulator:
         handle = simulator.create_handle()
@@ -162,13 +193,13 @@ def test_wps_wireless_devices_sends_expected_command_and_parses_reason():
         assert reason == "123\r\n"
 
 
-def test_wps_wireless_devices_returns_empty_reason_when_missing():
+def test_wps_wireless_devices_returns_reason_when_missing():
     with MockAutomationSimulator(responses=[b"WIRELESS DEVICES;SUCCEEDED;123\r\n"]) as simulator:
         handle = simulator.create_handle()
 
         reason = wps_wireless_devices(handle, "browse", "type=bluetooth")
 
-        assert reason == ""
+        assert reason == "123\r\n"
 
 
 def test_wps_wireless_devices_select_rejects_invalid_address():
@@ -243,6 +274,15 @@ def test_wps_open_capture_waits_until_max_wait_time_then_raises_wpstimeouterror(
             wps_open_capture(handle, "C:\\temp\\large.cfax")
 
 
+def test_wps_open_capture_accepts_crlf_terminated_success_status():
+    with MockAutomationSimulator(responses=[b"OPEN CAPTURE FILE; SUCCEEDED\r\n"]) as simulator:
+        handle = simulator.create_handle()
+
+        wps_open_capture(handle, "C:\\temp\\large.cfax")
+
+        assert simulator.received[0].decode() == "Open Capture File;C:\\temp\\large.cfax;notify=1"
+
+
 def test_wps_close_is_best_effort_on_timeouts():
     with MockAutomationSimulator() as simulator:
         handle = simulator.create_handle(timeout=0.01)
@@ -292,6 +332,27 @@ def test_wps_analyze_capture_stop_runs_full_stop_sequence():
             "Query State",
             "Query State",
             "Is Processing Complete",
+            "Is Processing Complete",
+        ]
+
+
+def test_wps_analyze_capture_stop_accepts_three_field_reason_contract():
+    responses = [
+        b"IS ANALYZE COMPLETE;SUCCEEDED;Reason=analyze_complete=yes\r\n",
+        b"STOP ANALYZE;SUCCEEDED;Reason=stopped\r\n",
+        b"QUERY STATE;SUCCEEDED;Reason=CAPTURE STOPPED|CurrentState=CAPTURE STOPPED\r\n",
+        b"IS PROCESSING COMPLETE;SUCCEEDED;Reason=TRUE\r\n",
+    ]
+    with MockAutomationSimulator(responses=responses) as simulator:
+        handle = simulator.create_handle()
+
+        wps_analyze_capture_stop(handle)
+
+        sent = [data.decode() for data in simulator.received]
+        assert sent == [
+            "IS ANALYZE COMPLETE",
+            "Stop Analyze",
+            "Query State",
             "Is Processing Complete",
         ]
 
