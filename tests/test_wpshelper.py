@@ -13,7 +13,9 @@ from wpshelper import (
     wps_close,
     wps_export_html,
     wps_find_installations,
+    wps_init,
     wps_open_capture,
+    wps_open_analyzer,
     wps_set_resolving_list,
     wps_update_matter_keys,
     wps_wireless_devices,
@@ -355,6 +357,36 @@ def test_wps_analyze_capture_stop_accepts_three_field_reason_contract():
             "Query State",
             "Is Processing Complete",
         ]
+
+
+def test_wps_open_analyzer_uses_existing_handle_from_wps_init():
+    signature = inspect.signature(wps_open_analyzer)
+    assert list(signature.parameters) == [
+        "handle",
+        "personality_key",
+        "show_log",
+        "recv_retry_attempts",
+        "recv_retry_sleep",
+    ]
+
+    responses = [
+        b"START FTS;SUCCEEDED;Reason=started\r\n",
+        b"IS INITIALIZED;SUCCEEDED;Reason=ready\r\n",
+    ]
+    with MockAutomationSimulator(responses=responses, connect_responses=[b"READY\r\n"]) as simulator:
+        handle = wps_init(
+            tcp_ip=simulator.address[0],
+            tcp_port=simulator.address[1],
+            wps_executable_path="C:/Program Files/FTSAutoServer.exe",
+            show_log=False,
+        )
+
+        returned_handle = wps_open_analyzer(handle, "SODERA")
+
+        assert returned_handle is handle
+        assert handle["personality_key"] == "SODERA"
+        sent = [data.decode() for data in simulator.received]
+        assert sent == ["Start FTS;C:/Program Files/FTSAutoServer.exe;SODERA", "Is Initialized"]
 
 
 @pytest.mark.parametrize(

@@ -553,6 +553,96 @@ def wps_open(
                 print(log_entry)
             time.sleep(handle['sleep_time'])  # Use configurable sleep time
     return handle
+def wps_open_analyzer(
+    handle,
+    personality_key=None,
+    show_log=False,
+    recv_retry_attempts=None,
+    recv_retry_sleep=None,
+):
+    """
+    Start the analyzer workflow on an existing handle returned by wps_init().
+
+    :param str personality_key: Personality key for the hardware. Current valid values are "SODERA", "X240", "X500", "X500e","VIEW".
+    :param bool show_log: If True, print log messages.
+    :param int recv_retry_attempts: Override handle recv retry attempts for this call.
+    :param float recv_retry_sleep: Override handle recv retry sleep for this call.
+    :returns: The same handle after the analyzer startup sequence completes.
+    :rtype: dict
+    :raises ValueError: On invalid handle, executable path, or personality key.
+    :raises WPSTimeoutError: On startup/initialization timeout.
+    :raises RuntimeError: If the automation server reports a failed startup.
+    """
+    if not isinstance(handle, dict) or 'socket' not in handle:
+        raise ValueError("Invalid handle: must be a dict containing a valid 'socket'.")
+    if personality_key is None or not str(personality_key):
+        raise ValueError("personality_key must be a non-empty string.")
+    elif personality_key not in ("SODERA", "X240", "X500", "X500e","VIEW"):
+        raise ValueError("personality_key must be one of: 'SODERA', 'X240', 'X500', 'X500e', 'VIEW'.")
+
+    wps_executable_path = handle.get('wps_executable_path')
+    if wps_executable_path is None or not str(wps_executable_path):
+        raise ValueError("handle must include a non-empty 'wps_executable_path' from wps_init().")
+
+    handle['personality_key'] = personality_key
+    s = handle['socket']
+
+    # Start Wireless Protocol Suite on the existing connection.
+    FTE_CMD = "Start FTS" + ";" + str(wps_executable_path) + ";" + personality_key
+    send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
+    log_entry = f"wps_open_analyzer: sending: {send_data}"
+    handle['log'].append(log_entry)
+    if show_log:
+        print(log_entry)
+    s.send(send_data)
+
+    _wait_for_command_result(
+        handle,
+        expected_cmd="START FTS",
+        expected_status="SUCCEEDED",
+        show_log=show_log,
+        context="wps_open_analyzer:start",
+        retry_attempts=recv_retry_attempts,
+        retry_sleep=recv_retry_sleep,
+    )
+
+    start_time = time.monotonic()
+    while True:
+        if time.monotonic() - start_time > handle['max_wait_time']:
+            error_msg = (
+                f"wps_open_analyzer: Timeout waiting for 'IS INITIALIZED SUCCEEDED' "
+                f"after {handle['max_wait_time']} seconds."
+            )
+            handle['log'].append(error_msg)
+            if show_log:
+                print(error_msg)
+            raise WPSTimeoutError(error_msg, handle=handle)
+
+        init_cmd = "Is Initialized"
+        send_data = init_cmd.encode(encoding='UTF-8', errors='strict')
+        log_entry = f"wps_open_analyzer: sending: {send_data}"
+        handle['log'].append(log_entry)
+        if show_log:
+            print(log_entry)
+        s.send(send_data)
+
+        ok, result_parse, result_str = _recv_and_parse(
+            handle,
+            expected_cmd="IS INITIALIZED",
+            expected_status="SUCCEEDED",
+            show_log=show_log,
+            retry_attempts=recv_retry_attempts,
+            retry_sleep=recv_retry_sleep,
+            context="wps_open_analyzer:init",
+        )
+        if ok:
+            return handle
+
+        log_entry = f"wps_open_analyzer: Parse of received: {result_parse}. Not the desired result so still waiting.."
+        handle['log'].append(log_entry)
+        if show_log:
+            print(log_entry)
+        time.sleep(handle['sleep_time'])
 
 def wps_configure(
     handle,
