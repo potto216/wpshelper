@@ -644,6 +644,149 @@ def wps_open_analyzer(
             print(log_entry)
         time.sleep(handle['sleep_time'])
 
+
+
+def _wifi_channels_for_standard(standard):
+    if standard == "5":
+        return set([1,2,3,4,5,6,7,8,9,10,11,12,13,36,40,44,48,52,56,60,64,100,104,108,112,116,120,124,128,132,136,140,149,153,157,161,165,169])
+    if standard in ("6", "7"):
+        return set([1,2,3,4,5,6,7,8,9,10,11,12,13,36,40,44,48,52,56,60,64,100,104,108,112,116,120,124,128,132,136,140,144,149,153,157,161,165,169] + list(range(1,222,4)))
+    raise ValueError("standard must be one of: '5', '6', '7'.")
+
+
+def _wifi_widths_for_channel(standard, channel):
+    if standard == "5":
+        if 1 <= channel <= 4:
+            return {"20", "40"}
+        if 5 <= channel <= 9:
+            return {"-40", "20", "40"}
+        if 10 <= channel <= 13:
+            return {"-40", "20"}
+        if channel in {165, 169}:
+            return {"20"}
+        return {"20", "40", "80"}
+
+    base = {"20"}
+    if 1 <= channel <= 4:
+        base.add("+40")
+        return base
+    if 5 <= channel <= 9:
+        return {"20", "+40", "-40"}
+    if 10 <= channel <= 13:
+        return {"20", "-40"}
+    if channel in {165, 169}:
+        return {"20"}
+    if channel in {132,136,140,144,149,153,157,161}:
+        return {"20", "40", "80"}
+    if channel >= 5955:  # defensive, not used (we validate channel ids, not freqs)
+        return {"20", "40", "80", "160"}
+    widths = {"20", "40", "80", "160"}
+    if standard == "7" and channel in set(range(1,222,4)):
+        widths = widths | {"320", "320-1", "320-2"}
+    return widths
+
+
+def _wifi_freq_for_channel(channel):
+    if 1 <= channel <= 13:
+        return 2407 + channel * 5
+    if channel in {36,40,44,48,52,56,60,64,100,104,108,112,116,120,124,128,132,136,140,144,149,153,157,161,165,169}:
+        return 5000 + channel * 5
+    if channel in set(range(1,222,4)):
+        return 5950 + channel * 5
+    return None
+
+
+def _normalize_wifi_value(v):
+    return str(v).strip()
+
+
+def _build_wifi_ioparameters(personality_key, wifi=None):
+    if not wifi:
+        return []
+    p = str(personality_key)
+    standard = _normalize_wifi_value(wifi.get("standard", "5"))
+    if standard not in {"5", "6", "7"}:
+        raise ValueError("wifi.standard must be one of: '5', '6', '7'.")
+    if p == "X240" and standard != "5":
+        raise ValueError("X240 only supports Wi-Fi standard 5.")
+    if p == "X500" and standard == "7":
+        raise ValueError("X500 does not support Wi-Fi standard 7.")
+
+    params = []
+    if "truncate" in wifi:
+        trunc = _normalize_wifi_value(wifi["truncate"]).lower()
+        if trunc not in {"on", "off"}:
+            raise ValueError("wifi.truncate must be 'on' or 'off'.")
+        params.append(f"truncate={trunc}")
+
+    if p in {"X500", "X500e"} and any(k in wifi for k in ("channel", "frequency", "radio1", "radio2")):
+        params.append(f"standard={standard}")
+
+    def _validate_chan_width(chan, width):
+        allowed = _wifi_widths_for_channel(standard, chan)
+        if width is not None and _normalize_wifi_value(width) not in allowed:
+            raise ValueError(f"Invalid channelwidth '{width}' for standard {standard} channel {chan}. Allowed: {sorted(allowed)}")
+
+    channel = wifi.get("channel")
+    frequency = wifi.get("frequency")
+    if channel is not None and frequency is not None:
+        raise ValueError("Specify only one of wifi.channel or wifi.frequency.")
+    if frequency is not None:
+        frequency = int(frequency)
+        matched = None
+        for ch in _wifi_channels_for_standard(standard):
+            if _wifi_freq_for_channel(ch) == frequency:
+                matched = ch
+                break
+        if matched is None:
+            raise ValueError(f"Frequency {frequency} is not valid for Wi-Fi standard {standard}.")
+        channel = matched
+    if channel is not None:
+        channel = int(channel)
+        if channel not in _wifi_channels_for_standard(standard):
+            raise ValueError(f"Channel {channel} is not valid for Wi-Fi standard {standard}.")
+        width = wifi.get("channelwidth")
+        _validate_chan_width(channel, width)
+        params.append(f"channel={channel}")
+        if width is not None:
+            params.append(f"channelwidth={_normalize_wifi_value(width)}")
+    elif frequency is not None:
+        params.append(f"frequency={frequency}")
+
+    def _validate_radio(name, data):
+        if not isinstance(data, dict):
+            raise ValueError(f"wifi.{name} must be a dict.")
+        capture = _normalize_wifi_value(data.get("capture", "yes")).lower()
+        if capture not in {"yes", "no"}:
+            raise ValueError(f"wifi.{name}.capture must be yes/no.")
+        chan = data.get("chan")
+        freq = data.get("freq")
+        if capture == "yes" and chan is None and freq is None:
+            raise ValueError(f"wifi.{name} requires chan or freq when capture=yes.")
+        if chan is not None and freq is not None:
+            raise ValueError(f"wifi.{name} must specify only chan or freq.")
+        parts=[f"capture={capture}"]
+        if chan is not None:
+            chan = int(chan)
+            if chan not in _wifi_channels_for_standard(standard):
+                raise ValueError(f"wifi.{name}.chan {chan} is invalid for standard {standard}.")
+            parts.append(f"chan={chan}")
+        if freq is not None:
+            freq = int(freq)
+            if not any(_wifi_freq_for_channel(c)==freq for c in _wifi_channels_for_standard(standard)):
+                raise ValueError(f"wifi.{name}.freq {freq} is invalid for standard {standard}.")
+            parts.append(f"freq={freq}")
+        if "chanwidth" in data:
+            parts.append(f"chanwidth={_normalize_wifi_value(data['chanwidth'])}")
+        return f"{name}:" + "|".join(parts)
+
+    for r in ("radio1", "radio2"):
+        if r in wifi and wifi[r] is not None:
+            if r == "radio2" and p == "X240":
+                raise ValueError("radio2 is not supported on X240.")
+            params.append(_validate_radio(r, wifi[r]))
+
+    return params
 def wps_configure(
     handle,
     personality_key,
@@ -651,6 +794,7 @@ def wps_configure(
     show_log=False,
     recv_retry_attempts=None,
     recv_retry_sleep=None,
+    wifi=None,
 ):
     """
     Configure the capture settings in WPS before recording.
@@ -661,7 +805,57 @@ def wps_configure(
     :param bool show_log: If True, print log messages.
     :param int recv_retry_attempts: Override handle recv retry attempts for this call.
     :param float recv_retry_sleep: Override handle recv retry sleep for this call.
+    :param dict|None wifi: Optional Wi-Fi IOParameters builder input.
+        When provided, this helper validates and appends Wi-Fi parameters to
+        ``Config Settings;IOParameters``.
+
+        Supported top-level keys:
+        - ``standard``: "5", "6", or "7" (device support is validated).
+        - ``truncate``: "on" or "off".
+        - ``channel`` or ``frequency``: choose one (mutually exclusive).
+        - ``channelwidth``: validated against selected standard + channel.
+        - ``radio1`` / ``radio2``: dicts for per-radio config.
+
+        ``radio1`` / ``radio2`` supported sub-keys:
+        - ``capture``: "yes" or "no" (defaults to "yes").
+        - ``chan`` or ``freq``: required when ``capture=yes``.
+        - ``chanwidth``: optional.
+
+        Examples:
+            X240 basic channel selection::
+
+                wps_configure(
+                    handle,
+                    personality_key="X240",
+                    capture_technology="wifi",
+                    wifi={"channel": 7, "channelwidth": "40"},
+                )
+
+            X500 with Wi-Fi 6 using frequency::
+
+                wps_configure(
+                    handle,
+                    personality_key="X500",
+                    capture_technology="wifi",
+                    wifi={"standard": "6", "frequency": 7015, "channelwidth": "160"},
+                )
+
+            X500e dual-radio setup::
+
+                wps_configure(
+                    handle,
+                    personality_key="X500e",
+                    capture_technology="wifi",
+                    wifi={
+                        "standard": "7",
+                        "truncate": "on",
+                        "radio1": {"capture": "yes", "chan": 1, "chanwidth": "20"},
+                        "radio2": {"capture": "yes", "freq": 5995, "chanwidth": "80"},
+                    },
+                )
+
     :returns: None
+    :raises ValueError: On invalid Wi-Fi parameter combinations/values.
     :raises WPSTimeoutError: If configuration does not succeed before timeout.
     """    
     s = handle['socket']
@@ -675,6 +869,12 @@ def wps_configure(
         FTE_CMD="Config Settings;IOParameters;" + personality_key + ";analyze=inquiryprocess-off|pagingnoconn-off|nullsandpolls-off|emptyle-on|anonymousadv-on|meshadv-off|lecrcerrors=on;"
     else:
         FTE_CMD="Config Settings;IOParameters;" + personality_key + ";analyze=inquiryprocess-off|pagingnoconn-off|nullsandpolls-off|emptyle-on|anonymousadv-on|meshadv-off|lecrcerrors=on;" +  capture_technology
+
+    wifi_params = _build_wifi_ioparameters(personality_key, wifi=wifi)
+    if wifi_params:
+        if not FTE_CMD.endswith(";"):
+            FTE_CMD += ";"
+        FTE_CMD += ";".join(wifi_params)
 
     send_data=FTE_CMD.encode(encoding='UTF-8',errors='strict')
     log_entry = f"wps_configure: sending: {send_data}"

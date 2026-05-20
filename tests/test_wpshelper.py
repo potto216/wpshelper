@@ -20,6 +20,7 @@ from wpshelper import (
     wps_update_matter_keys,
     wps_wireless_devices,
     wps_write_log,
+    wps_configure,
 )
 
 
@@ -528,3 +529,52 @@ def test_wps_write_log_to_file_path(tmp_path):
 
     assert saved_path == str(out_file)
     assert out_file.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+
+def test_wps_configure_wifi_builds_standard_and_radio_params():
+    with MockAutomationSimulator(responses=[b"CONFIG SETTINGS;SUCCEEDED;ok\r\n"]) as simulator:
+        handle = simulator.create_handle()
+        wps_configure(
+            handle,
+            personality_key="X500e",
+            capture_technology="wifi",
+            wifi={
+                "standard": "7",
+                "truncate": "on",
+                "channel": 7,
+                "channelwidth": "20",
+                "radio1": {"capture": "yes", "chan": 1, "chanwidth": "20"},
+                "radio2": {"capture": "no"},
+            },
+        )
+        cmd = simulator.received[0].decode()
+        assert "standard=7" in cmd
+        assert "truncate=on" in cmd
+        assert "channel=7" in cmd
+        assert "channelwidth=20" in cmd
+        assert "radio1:capture=yes|chan=1|chanwidth=20" in cmd
+        assert "radio2:capture=no" in cmd
+
+
+def test_wps_configure_wifi_rejects_invalid_channelwidth_for_standard():
+    with MockAutomationSimulator(responses=[b"CONFIG SETTINGS;SUCCEEDED;ok\r\n"]) as simulator:
+        handle = simulator.create_handle()
+        with pytest.raises(ValueError, match="Invalid channelwidth"):
+            wps_configure(
+                handle,
+                personality_key="X500",
+                capture_technology="wifi",
+                wifi={"standard": "5", "channel": 36, "channelwidth": "160"},
+            )
+
+
+def test_wps_configure_wifi_rejects_radio2_on_x240():
+    with MockAutomationSimulator(responses=[b"CONFIG SETTINGS;SUCCEEDED;ok\r\n"]) as simulator:
+        handle = simulator.create_handle()
+        with pytest.raises(ValueError, match="radio2"):
+            wps_configure(
+                handle,
+                personality_key="X240",
+                capture_technology="wifi",
+                wifi={"radio2": {"capture": "yes", "chan": 1}},
+            )
